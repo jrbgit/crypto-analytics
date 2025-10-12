@@ -1,0 +1,417 @@
+"""
+LiveCoinWatch API data collector with rate limiting and change tracking.
+"""
+
+import os
+import time
+import json
+import hashlib
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from loguru import logger
+from dotenv import load_dotenv
+
+# Import our database models
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+
+from models.database import (
+    DatabaseManager, CryptoProject, ProjectLink, ProjectImage, 
+    ProjectChange, APIUsage
+)
+
+
+@dataclass
+class RateLimit:
+    """Rate limiting configuration."""
+    requests_per_minute: int = 60
+    daily_limit: int = 10000
+    current_usage: int = 0
+    last_reset: datetime = datetime.utcnow()
+
+
+class LiveCoinWatchClient:
+    """Client for LiveCoinWatch API with comprehensive data collection."""
+    
+    BASE_URL = "https://api.livecoinwatch.com"
+    
+    def __init__(self, api_key: str, database_manager: DatabaseManager):
+        self.api_key = api_key
+        self.db_manager = database_manager
+        self.rate_limit = RateLimit()
+        
+        # Setup HTTP session with retries
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
+        # Default headers
+        self.session.headers.update({
+            'x-api-key': self.api_key,
+            'Content-Type': 'application/json',
+            'User-Agent': 'CryptoAnalytics/1.0'
+        })
+        
+        logger.info("LiveCoinWatch client initialized")
+    
+    def _check_rate_limit(self) -> bool:
+        """Check if we can make a request within rate limits."""
+        now = datetime.utcnow()
+        
+        # Reset daily counter if it's a new day
+        if now.date() > self.rate_limit.last_reset.date():
+            self.rate_limit.current_usage = 0
+            self.rate_limit.last_reset = now
+            logger.info("Daily rate limit reset")
+        
+        # Check daily limit
+        if self.rate_limit.current_usage >= self.rate_limit.daily_limit:
+            logger.error("Daily rate limit exceeded")
+            return False
+            
+        return True
+    
+    def _wait_for_rate_limit(self):
+        """Wait if necessary to respect rate limits."""
+        # Simple rate limiting - wait 1 second between requests
+        time.sleep(1)
+    
+    def _make_request(self, endpoint: str, payload: Dict) -> Optional[Dict]:
+        """Make a request to the API with error handling and logging."""
+        
+        if not self._check_rate_limit():
+            return None
+        
+        self._wait_for_rate_limit()
+        
+        url = f"{self.BASE_URL}{endpoint}"
+        start_time = time.time()
+        
+        try:
+            logger.debug(f"Making request to {endpoint}")
+            response = self.session.post(url, json=payload, timeout=30)
+            response_time = time.time() - start_time
+            
+            # Log API usage
+            with self.db_manager.get_session() as session:
+                self.db_manager.log_api_usage(
+                    session=session,
+                    provider='livecoinwatch',
+                    endpoint=endpoint,
+                    status=response.status_code,
+                    response_size=len(response.content),
+                    response_time=response_time
+                )
+                session.commit()
+            
+            self.rate_limit.current_usage += 1
+            
+            if response.status_code == 200:
+                logger.success(f"Request successful: {endpoint}")
+                return response.json()
+            elif response.status_code == 429:
+                logger.warning("Rate limit hit, backing off")
+                time.sleep(60)  # Wait 1 minute
+                return None
+            else:
+                logger.error(f"API request failed: {response.status_code} - {response.text}")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            return None
+    
+    def get_coins_list(self, limit: int = 100, offset: int = 0, 
+                      currency: str = "USD", sort: str = "rank") -> Optional[List[Dict]]:
+        """Get list of cryptocurrencies with metadata."""
+        
+        payload = {
+            "currency": currency,
+            "sort": sort,
+            "order": "ascending",
+            "offset": offset,
+            "limit": limit,
+            "meta": True  # Include metadata like links
+        }
+        
+        response = self._make_request("/coins/list", payload)
+        return response.get('data', []) if response else None
+    
+    def get_single_coin(self, code: str, currency: str = "USD") -> Optional[Dict]:
+        """Get detailed data for a single cryptocurrency."""
+        
+        payload = {
+            "currency": currency,
+            "code": code,
+            "meta": True
+        }
+        
+        response = self._make_request("/coins/single", payload)
+        return response if response else None
+    
+    def process_coin_data(self, coin_data: Dict) -> CryptoProject:
+        """Process API response data and update/create project in database."""
+        
+        with self.db_manager.get_session() as session:
+            # Check if project exists
+            existing_project = session.query(CryptoProject).filter_by(code=coin_data['code']).first()
+            
+            if existing_project:
+                project = existing_project
+                # Track changes for existing project
+                self._track_changes(session, project, coin_data)
+            else:
+                # Create new project
+                project = CryptoProject(code=coin_data['code'])
+                session.add(project)
+                logger.info(f"Creating new project: {coin_data['name']} ({coin_data['code']})")
+            
+            # Update project data
+            project.name = coin_data.get('name')
+            project.rank = coin_data.get('rank')
+            project.age = coin_data.get('age')
+            project.color = coin_data.get('color')
+            
+            # Supply data
+            project.circulating_supply = coin_data.get('circulatingSupply')
+            project.total_supply = coin_data.get('totalSupply')
+            project.max_supply = coin_data.get('maxSupply')
+            
+            # Market data
+            project.current_price = coin_data.get('rate')
+            project.market_cap = coin_data.get('cap')
+            project.volume_24h = coin_data.get('volume')
+            project.ath_usd = coin_data.get('allTimeHighUSD')
+            
+            # Price deltas
+            delta = coin_data.get('delta', {})
+            project.price_change_1h = delta.get('hour')
+            project.price_change_24h = delta.get('day')
+            project.price_change_7d = delta.get('week')
+            project.price_change_30d = delta.get('month')
+            project.price_change_90d = delta.get('quarter')
+            project.price_change_1y = delta.get('year')
+            
+            # Exchange data
+            project.exchanges_count = coin_data.get('exchanges')
+            project.markets_count = coin_data.get('markets')
+            project.pairs_count = coin_data.get('pairs')
+            
+            # Categories
+            project.categories = coin_data.get('categories')
+            project.last_api_fetch = datetime.utcnow()
+            
+            # Process links
+            self._process_links(session, project, coin_data.get('links', {}))
+            
+            # Process images
+            self._process_images(session, project, coin_data)
+            
+            session.commit()
+            logger.success(f"Updated project: {project.name}")
+            
+            return project
+    
+    def _track_changes(self, session, project: CryptoProject, new_data: Dict):
+        """Track changes to project data."""
+        
+        # Define fields to track for changes
+        field_mappings = {
+            'rank': 'rank',
+            'rate': 'current_price',
+            'cap': 'market_cap',
+            'volume': 'volume_24h',
+            'circulatingSupply': 'circulating_supply',
+            'totalSupply': 'total_supply',
+            'maxSupply': 'max_supply',
+            'exchanges': 'exchanges_count',
+            'markets': 'markets_count',
+            'pairs': 'pairs_count'
+        }
+        
+        for api_field, db_field in field_mappings.items():
+            old_value = getattr(project, db_field)
+            new_value = new_data.get(api_field)
+            
+            if old_value != new_value and new_value is not None:
+                self.db_manager.track_change(
+                    session, project, db_field, old_value, new_value
+                )
+        
+        # Track delta changes
+        delta = new_data.get('delta', {})
+        delta_mappings = {
+            'hour': 'price_change_1h',
+            'day': 'price_change_24h',
+            'week': 'price_change_7d',
+            'month': 'price_change_30d',
+            'quarter': 'price_change_90d',
+            'year': 'price_change_1y'
+        }
+        
+        for delta_field, db_field in delta_mappings.items():
+            old_value = getattr(project, db_field)
+            new_value = delta.get(delta_field)
+            
+            if old_value != new_value and new_value is not None:
+                self.db_manager.track_change(
+                    session, project, db_field, old_value, new_value
+                )
+    
+    def _process_links(self, session, project: CryptoProject, links_data: Dict):
+        """Process and update project links."""
+        
+        for link_type, url in links_data.items():
+            if url:  # Skip null values
+                # Check if link already exists
+                existing_link = session.query(ProjectLink).filter_by(
+                    project_id=project.id, 
+                    link_type=link_type
+                ).first()
+                
+                if existing_link:
+                    if existing_link.url != url:
+                        # URL changed, update and mark for re-analysis
+                        existing_link.url = url
+                        existing_link.needs_analysis = True
+                        existing_link.updated_at = datetime.utcnow()
+                else:
+                    # Create new link
+                    new_link = ProjectLink(
+                        project_id=project.id,
+                        link_type=link_type,
+                        url=url,
+                        needs_analysis=True
+                    )
+                    session.add(new_link)
+    
+    def _process_images(self, session, project: CryptoProject, coin_data: Dict):
+        """Process and update project images."""
+        
+        image_fields = ['png32', 'png64', 'webp32', 'webp64']
+        
+        for image_type in image_fields:
+            url = coin_data.get(image_type)
+            if url:
+                # Check if image already exists
+                existing_image = session.query(ProjectImage).filter_by(
+                    project_id=project.id,
+                    image_type=image_type
+                ).first()
+                
+                if not existing_image:
+                    new_image = ProjectImage(
+                        project_id=project.id,
+                        image_type=image_type,
+                        url=url
+                    )
+                    session.add(new_image)
+                elif existing_image.url != url:
+                    existing_image.url = url
+    
+    def collect_top_coins(self, limit: int = 100) -> List[CryptoProject]:
+        """Collect data for top coins by market cap."""
+        
+        logger.info(f"Starting collection of top {limit} coins")
+        projects = []
+        
+        # Get coins in batches to stay within rate limits
+        batch_size = 50
+        for offset in range(0, limit, batch_size):
+            current_batch_size = min(batch_size, limit - offset)
+            
+            logger.info(f"Fetching batch: {offset + 1} to {offset + current_batch_size}")
+            
+            coins_data = self.get_coins_list(
+                limit=current_batch_size, 
+                offset=offset
+            )
+            
+            if not coins_data:
+                logger.error(f"Failed to fetch batch at offset {offset}")
+                break
+            
+            for coin_data in coins_data:
+                try:
+                    project = self.process_coin_data(coin_data)
+                    projects.append(project)
+                except Exception as e:
+                    logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
+                    continue
+            
+            # Pause between batches
+            time.sleep(2)
+        
+        logger.success(f"Collected data for {len(projects)} projects")
+        return projects
+    
+    def get_usage_stats(self) -> Dict:
+        """Get current API usage statistics."""
+        
+        with self.db_manager.get_session() as session:
+            today = datetime.utcnow().date()
+            
+            # Count today's usage
+            today_usage = session.query(APIUsage).filter(
+                APIUsage.api_provider == 'livecoinwatch',
+                APIUsage.request_timestamp >= datetime.combine(today, datetime.min.time())
+            ).count()
+            
+            return {
+                'daily_limit': self.rate_limit.daily_limit,
+                'today_usage': today_usage,
+                'remaining': self.rate_limit.daily_limit - today_usage,
+                'current_session_usage': self.rate_limit.current_usage,
+                'last_reset': self.rate_limit.last_reset
+            }
+
+
+def main():
+    """Main function for testing the collector."""
+    
+    load_dotenv()
+    
+    # Initialize database
+    database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')
+    db_manager = DatabaseManager(database_url)
+    db_manager.create_tables()
+    
+    # Initialize API client
+    api_key = os.getenv('LIVECOINWATCH_API_KEY')
+    if not api_key:
+        logger.error("LIVECOINWATCH_API_KEY environment variable not set")
+        return
+    
+    client = LiveCoinWatchClient(api_key, db_manager)
+    
+    # Test collection
+    logger.info("Testing LiveCoinWatch data collection")
+    
+    # Show current usage
+    stats = client.get_usage_stats()
+    logger.info(f"Usage stats: {stats}")
+    
+    # Collect top 50 coins as a test
+    projects = client.collect_top_coins(limit=50)
+    
+    logger.info(f"Collection complete! Processed {len(projects)} projects")
+    
+    # Show final usage
+    final_stats = client.get_usage_stats()
+    logger.info(f"Final usage stats: {final_stats}")
+
+
+if __name__ == "__main__":
+    main()
