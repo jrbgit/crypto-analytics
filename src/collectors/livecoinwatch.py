@@ -6,7 +6,7 @@ import os
 import time
 import json
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
@@ -33,7 +33,7 @@ class RateLimit:
     requests_per_minute: int = 60
     daily_limit: int = 10000
     current_usage: int = 0
-    last_reset: datetime = datetime.utcnow()
+    last_reset: datetime = datetime.now(UTC)
 
 
 class LiveCoinWatchClient:
@@ -68,7 +68,7 @@ class LiveCoinWatchClient:
     
     def _check_rate_limit(self) -> bool:
         """Check if we can make a request within rate limits."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         
         # Reset daily counter if it's a new day
         if now.date() > self.rate_limit.last_reset.date():
@@ -147,7 +147,13 @@ class LiveCoinWatchClient:
         }
         
         response = self._make_request("/coins/list", payload)
-        return response.get('data', []) if response else None
+        if response:
+            # Handle both dictionary and list responses
+            if isinstance(response, dict):
+                return response.get('data', [])
+            elif isinstance(response, list):
+                return response
+        return None
     
     def get_single_coin(self, code: str, currency: str = "USD") -> Optional[Dict]:
         """Get detailed data for a single cryptocurrency."""
@@ -211,7 +217,10 @@ class LiveCoinWatchClient:
             
             # Categories
             project.categories = coin_data.get('categories')
-            project.last_api_fetch = datetime.utcnow()
+            project.last_api_fetch = datetime.now(UTC)
+            
+            # Flush to get the project ID before processing related data
+            session.flush()
             
             # Process links
             self._process_links(session, project, coin_data.get('links', {}))
@@ -286,7 +295,7 @@ class LiveCoinWatchClient:
                         # URL changed, update and mark for re-analysis
                         existing_link.url = url
                         existing_link.needs_analysis = True
-                        existing_link.updated_at = datetime.utcnow()
+                        existing_link.updated_at = datetime.now(UTC)
                 else:
                     # Create new link
                     new_link = ProjectLink(
@@ -357,11 +366,102 @@ class LiveCoinWatchClient:
         logger.success(f"Collected data for {len(projects)} projects")
         return projects
     
+    def collect_all_coins(self, max_coins: int = None, start_offset: int = 0) -> List[CryptoProject]:
+        """Collect data for all available cryptocurrencies.
+        
+        Args:
+            max_coins: Maximum number of coins to collect (None for all available)
+            start_offset: Starting offset (useful for resuming interrupted collections)
+        
+        Returns:
+            List of processed CryptoProject objects
+        """
+        
+        logger.info(f"Starting collection of all available coins (starting from offset {start_offset})")
+        projects = []
+        batch_size = 50  # API limit per request
+        offset = start_offset
+        consecutive_empty_batches = 0
+        max_empty_batches = 3  # Stop after 3 consecutive empty batches
+        
+        while True:
+            # Check rate limits before continuing
+            stats = self.get_usage_stats()
+            remaining = stats['remaining']
+            
+            if remaining <= 10:  # Keep some buffer
+                logger.warning(f"Approaching daily rate limit. Only {remaining} requests remaining.")
+                logger.info("Stopping collection to preserve rate limit for other operations.")
+                break
+            
+            # Check if we've hit the max_coins limit
+            if max_coins and len(projects) >= max_coins:
+                logger.info(f"Reached maximum coin limit of {max_coins}")
+                break
+            
+            # Calculate current batch size
+            current_batch_size = batch_size
+            if max_coins:
+                remaining_coins = max_coins - len(projects)
+                current_batch_size = min(batch_size, remaining_coins)
+            
+            logger.info(f"Fetching batch: {offset + 1} to {offset + current_batch_size} (Total collected: {len(projects)})")
+            
+            coins_data = self.get_coins_list(
+                limit=current_batch_size,
+                offset=offset
+            )
+            
+            if not coins_data or len(coins_data) == 0:
+                consecutive_empty_batches += 1
+                logger.warning(f"Empty batch at offset {offset} (consecutive empty: {consecutive_empty_batches})")
+                
+                if consecutive_empty_batches >= max_empty_batches:
+                    logger.info("Multiple consecutive empty batches. Assuming we've reached the end.")
+                    break
+                    
+                # Skip ahead a bit in case of gaps
+                offset += batch_size
+                continue
+            else:
+                consecutive_empty_batches = 0  # Reset counter on successful batch
+            
+            # Process coins in current batch
+            batch_processed = 0
+            for coin_data in coins_data:
+                try:
+                    project = self.process_coin_data(coin_data)
+                    projects.append(project)
+                    batch_processed += 1
+                except Exception as e:
+                    logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
+                    continue
+            
+            logger.success(f"Processed {batch_processed}/{len(coins_data)} coins in batch")
+            
+            # Check if we got fewer results than requested (possible end of data)
+            if len(coins_data) < current_batch_size:
+                logger.info(f"Received {len(coins_data)} coins, less than requested {current_batch_size}. Likely at end of data.")
+                break
+            
+            offset += len(coins_data)
+            
+            # Pause between batches to respect rate limits
+            time.sleep(2)
+            
+            # Progress update every 10 batches
+            if (offset // batch_size) % 10 == 0:
+                current_stats = self.get_usage_stats()
+                logger.info(f"Progress update: {len(projects)} coins collected, {current_stats['remaining']} API calls remaining")
+        
+        logger.success(f"Collection complete! Processed {len(projects)} total projects")
+        return projects
+    
     def get_usage_stats(self) -> Dict:
         """Get current API usage statistics."""
         
         with self.db_manager.get_session() as session:
-            today = datetime.utcnow().date()
+            today = datetime.now(UTC).date()
             
             # Count today's usage
             today_usage = session.query(APIUsage).filter(
@@ -379,9 +479,26 @@ class LiveCoinWatchClient:
 
 
 def main():
-    """Main function for testing the collector."""
+    """Main function for the collector with command line argument support."""
     
-    load_dotenv()
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='LiveCoinWatch Data Collector')
+    parser.add_argument('--all', action='store_true', 
+                       help='Collect all available cryptocurrencies (default: top 50)')
+    parser.add_argument('--limit', type=int, default=50,
+                       help='Maximum number of coins to collect (default: 50)')
+    parser.add_argument('--max-coins', type=int,
+                       help='Maximum coins when using --all (overrides API limits)')
+    parser.add_argument('--offset', type=int, default=0,
+                       help='Starting offset for collection (useful for resuming)')
+    
+    args = parser.parse_args()
+    
+    # Load environment variables from the config directory
+    config_path = Path(__file__).parent.parent.parent / "config" / "env"
+    load_dotenv(config_path)
     
     # Initialize database
     database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')
@@ -396,21 +513,46 @@ def main():
     
     client = LiveCoinWatchClient(api_key, db_manager)
     
-    # Test collection
-    logger.info("Testing LiveCoinWatch data collection")
-    
     # Show current usage
     stats = client.get_usage_stats()
     logger.info(f"Usage stats: {stats}")
     
-    # Collect top 50 coins as a test
-    projects = client.collect_top_coins(limit=50)
+    if stats['remaining'] <= 10:
+        logger.error(f"Insufficient API calls remaining: {stats['remaining']}")
+        logger.info("Please wait until tomorrow or upgrade your API plan.")
+        return
+    
+    # Collect data based on arguments
+    if args.all:
+        logger.info("Starting collection of ALL available cryptocurrencies")
+        projects = client.collect_all_coins(
+            max_coins=args.max_coins, 
+            start_offset=args.offset
+        )
+    else:
+        logger.info(f"Starting collection of top {args.limit} cryptocurrencies")
+        projects = client.collect_top_coins(limit=args.limit)
     
     logger.info(f"Collection complete! Processed {len(projects)} projects")
     
     # Show final usage
     final_stats = client.get_usage_stats()
     logger.info(f"Final usage stats: {final_stats}")
+    
+    # Summary statistics
+    if projects:
+        logger.info(f"\n=== Collection Summary ===")
+        logger.info(f"Total projects collected: {len(projects)}")
+        logger.info(f"API calls used this session: {final_stats['current_session_usage']}")
+        logger.info(f"API calls remaining today: {final_stats['remaining']}")
+        
+        # Show some sample data
+        logger.info(f"\nSample projects collected:")
+        for i, project in enumerate(projects[:5]):
+            logger.info(f"  {i+1}. {project.name} ({project.code}) - Rank: {project.rank}")
+        
+        if len(projects) > 5:
+            logger.info(f"  ... and {len(projects) - 5} more")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # API Keys
-LIVECOINWATCH_API_KEY=your_livecoinwatch_api_key_here
+LIVECOINWATCH_API_KEY=e445bbe9-5a54-4925-a17f-dfb4c36a09fa
 OPENAI_API_KEY=your_openai_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 

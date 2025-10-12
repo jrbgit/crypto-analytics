@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 from database import DatabaseManager
 from loguru import logger
+from sqlalchemy import text
 
 def main():
     """Initialize the database with all tables."""
@@ -43,7 +44,7 @@ def main():
         with db_manager.get_session() as session:
             logger.info("Testing database connection...")
             # Try a simple query
-            session.execute("SELECT 1").fetchone()
+            session.execute(text("SELECT 1")).fetchone()
             logger.success("Database connection test passed!")
             
     except Exception as e:
