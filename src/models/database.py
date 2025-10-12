@@ -276,11 +276,15 @@ class DatabaseManager:
                     old_value: Any, new_value: Any, data_source: str = 'livecoinwatch'):
         """Track changes to project data."""
         if old_value != new_value:
+            # Serialize values before creating the ProjectChange object
+            serialized_old = str(old_value) if old_value is not None else None
+            serialized_new = str(new_value) if new_value is not None else None
+            
             change = ProjectChange(
                 project_id=project.id,
                 field_name=field_name,
-                old_value=change.serialize_value(old_value) if hasattr(change, 'serialize_value') else str(old_value),
-                new_value=change.serialize_value(new_value) if hasattr(change, 'serialize_value') else str(new_value),
+                old_value=serialized_old,
+                new_value=serialized_new,
                 change_type='UPDATE',
                 data_source=data_source
             )
