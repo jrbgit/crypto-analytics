@@ -31,9 +31,11 @@ from models.database import DatabaseManager, CryptoProject, ProjectLink, LinkCon
 from scrapers.website_scraper import WebsiteScraper, WebsiteAnalysisResult
 from scrapers.whitepaper_scraper import WhitepaperScraper, WhitepaperContent
 from scrapers.medium_scraper import MediumScraper, MediumAnalysisResult
+from scrapers.reddit_scraper import RedditScraper, RedditAnalysisResult
 from analyzers.website_analyzer import WebsiteContentAnalyzer, WebsiteAnalysis
 from analyzers.whitepaper_analyzer import WhitepaperContentAnalyzer, WhitepaperAnalysis
 from analyzers.medium_analyzer import MediumContentAnalyzer, MediumAnalysis
+from analyzers.reddit_analyzer import RedditContentAnalyzer, RedditAnalysis
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -73,6 +75,11 @@ class ContentAnalysisPipeline:
             recent_days=scraper_config.get('recent_days', 90),
             delay=scraper_config.get('delay', 2.0)
         )
+        self.reddit_scraper = RedditScraper(
+            recent_days=scraper_config.get('recent_days', 30),
+            max_posts=scraper_config.get('max_posts', 100),
+            rate_limit_delay=scraper_config.get('delay', 1.0)
+        )
         
         # Initialize analyzers
         analyzer_config = analyzer_config or {}
@@ -87,6 +94,11 @@ class ContentAnalysisPipeline:
             ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
         )
         self.medium_analyzer = MediumContentAnalyzer(
+            provider=analyzer_config.get('provider', 'ollama'),
+            model=analyzer_config.get('model', 'llama3.1:latest'),
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+        )
+        self.reddit_analyzer = RedditContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
             ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
@@ -108,7 +120,7 @@ class ContentAnalysisPipeline:
             List of (project, link) tuples ready for analysis
         """
         if link_types is None:
-            link_types = ['website', 'whitepaper', 'medium']
+            link_types = ['website', 'whitepaper', 'medium', 'reddit']
             
         with self.db_manager.get_session() as session:
             # Query for projects with links that need analysis
@@ -168,6 +180,8 @@ class ContentAnalysisPipeline:
                 return self._analyze_whitepaper(project, link)
             elif link.link_type == 'medium':
                 return self._analyze_medium(project, link)
+            elif link.link_type == 'reddit':
+                return self._analyze_reddit(project, link)
             else:
                 logger.warning(f"Unsupported link type: {link.link_type}")
                 return None
@@ -287,6 +301,41 @@ class ContentAnalysisPipeline:
         self._log_medium_analysis_usage(medium_analysis)
         
         logger.success(f"Medium analysis complete for {project.name}: Engagement score {medium_analysis.community_engagement_score}/10")
+        
+        return analysis_record
+    
+    def _analyze_reddit(self, project: CryptoProject, reddit_link: ProjectLink) -> Optional[LinkContentAnalysis]:
+        """Analyze a Reddit community link."""
+        # Step 1: Scrape the Reddit community
+        scrape_result = self.reddit_scraper.scrape_reddit_community(reddit_link.url)
+        
+        if not scrape_result.scrape_success:
+            logger.error(f"Reddit scraping failed for {reddit_link.url}: {scrape_result.error_message}")
+            self._update_scrape_status(reddit_link, success=False, error=scrape_result.error_message)
+            return None
+        
+        # Step 2: Analyze with LLM
+        reddit_analysis = self.reddit_analyzer.analyze_reddit_community(scrape_result)
+        
+        if not reddit_analysis:
+            logger.error(f"Reddit LLM analysis failed for {reddit_link.url}")
+            self._update_scrape_status(reddit_link, success=False, error="LLM analysis failed")
+            return None
+        
+        # Step 3: Store results in database
+        analysis_record = self._store_reddit_analysis_results(
+            reddit_link,
+            scrape_result,
+            reddit_analysis
+        )
+        
+        # Step 4: Update scrape status
+        self._update_scrape_status(reddit_link, success=True)
+        
+        # Step 5: Log API usage
+        self._log_reddit_analysis_usage(reddit_analysis)
+        
+        logger.success(f"Reddit analysis complete for {project.name}: Community health {reddit_analysis.community_health_score}/10")
         
         return analysis_record
     
@@ -624,12 +673,114 @@ class ContentAnalysisPipeline:
             session.add(usage)
             session.commit()
     
+    def _store_reddit_analysis_results(self,
+                                     reddit_link: ProjectLink,
+                                     scrape_result: RedditAnalysisResult,
+                                     reddit_analysis: RedditAnalysis) -> LinkContentAnalysis:
+        """Store Reddit analysis results in the database."""
+        
+        with self.db_manager.get_session() as session:
+            # Combine post data for storage
+            combined_content = "\n\n".join([
+                f"=== {post.title} (Score: {post.score}, Comments: {post.num_comments}) ===\n{post.content[:500]}..."
+                for post in scrape_result.posts_analyzed[:10]  # Top 10 posts
+            ])
+            
+            # Calculate content hash based on subreddit and analysis time
+            content_hash = hashlib.sha256(f"{scrape_result.subreddit_name}_{scrape_result.analysis_timestamp}".encode()).hexdigest()
+            
+            # Check if we already have analysis for this content
+            existing = session.query(LinkContentAnalysis).filter(
+                and_(
+                    LinkContentAnalysis.link_id == reddit_link.id,
+                    LinkContentAnalysis.content_hash == content_hash
+                )
+            ).first()
+            
+            if existing:
+                logger.info(f"Content unchanged for {reddit_link.url}, skipping analysis storage")
+                return existing
+            
+            # Create new analysis record with Reddit-specific data
+            analysis_record = LinkContentAnalysis(
+                link_id=reddit_link.id,
+                
+                # Content metadata
+                raw_content=combined_content[:50000],  # Limit size for database
+                content_hash=content_hash,
+                page_title=f"r/{reddit_analysis.subreddit_name} - Reddit Community",
+                pages_analyzed=reddit_analysis.total_posts_analyzed,
+                total_word_count=sum(len(post.title + post.content) for post in scrape_result.posts_analyzed),
+                
+                # Document info
+                document_type='reddit_community',
+                extraction_method='reddit_scraper',
+                
+                # Analysis scores adapted for Reddit
+                technical_depth_score=reddit_analysis.development_awareness_score,  # Map development awareness to technical depth
+                content_quality_score=reddit_analysis.discussion_quality_score,
+                confidence_score=reddit_analysis.confidence_score,
+                
+                # Reddit-specific insights mapped to existing fields
+                use_cases=reddit_analysis.project_milestone_discussions,  # Milestone discussions as use cases
+                partnerships=reddit_analysis.partnership_discussions,
+                roadmap_items=reddit_analysis.roadmap_awareness_indicators,
+                recent_updates=reddit_analysis.competitive_discussions,
+                red_flags=reddit_analysis.red_flags + reddit_analysis.manipulation_indicators + reddit_analysis.misinformation_presence,
+                
+                # Sentiment and engagement (map to existing fields)
+                sentiment_score=reddit_analysis.overall_sentiment_score,
+                categories=list(reddit_analysis.content_type_breakdown.keys()),
+                entities=reddit_analysis.fud_indicators + reddit_analysis.fomo_indicators,
+                
+                # Store Reddit-specific data in JSON fields
+                summary=f"Reddit community analysis: {reddit_analysis.total_posts_analyzed} posts analyzed from r/{reddit_analysis.subreddit_name} ({reddit_analysis.subscriber_count:,} subscribers). Community health: {reddit_analysis.community_health_score}/10. Technical discussion: {reddit_analysis.technical_discussion_percentage:.1f}%",
+                technical_summary=f"Community health: {reddit_analysis.community_health_score}/10. Discussion quality: {reddit_analysis.discussion_quality_score}/10. Technical literacy: {reddit_analysis.technical_literacy_level}. Confidence level: {reddit_analysis.community_confidence_level}",
+                key_points=(
+                    [f"Community health: {reddit_analysis.community_health_score}/10"] +
+                    [f"Discussion quality: {reddit_analysis.discussion_quality_score}/10"] +
+                    [f"Engagement authenticity: {reddit_analysis.engagement_authenticity_score}/10"] +
+                    [f"Technical discussion: {reddit_analysis.technical_discussion_percentage:.1f}%"] +
+                    [f"Hype content: {reddit_analysis.hype_content_percentage:.1f}%"] +
+                    [f"Echo chamber risk: {reddit_analysis.echo_chamber_risk}"] +
+                    reddit_analysis.user_retention_indicators[:3]  # Top 3 retention indicators
+                ),
+                
+                # Analysis metadata
+                model_used=reddit_analysis.model_used,
+                analysis_version='2.3'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            
+            logger.success(f"Stored Reddit analysis results for {reddit_link.url}")
+            return analysis_record
+    
+    def _log_reddit_analysis_usage(self, reddit_analysis: RedditAnalysis):
+        """Log Reddit LLM API usage for cost tracking."""
+        with self.db_manager.get_session() as session:
+            # Estimate token usage based on posts analyzed
+            estimated_tokens = reddit_analysis.posts_with_detailed_analysis * 2000  # Rough estimate per detailed post
+            
+            usage = APIUsage(
+                api_provider=self.reddit_analyzer.provider,
+                endpoint='reddit_analysis',
+                response_status=200,
+                credits_used=1,
+                response_size=estimated_tokens,
+                response_time=0.0  # We don't track this currently
+            )
+            
+            session.add(usage)
+            session.commit()
+    
     def run_analysis_batch(self, link_types: List[str] = None, max_projects: int = None) -> Dict[str, int]:
         """
         Run a batch of content analyses.
         
         Args:
-            link_types: Types of links to analyze ['website', 'whitepaper', 'medium'] or None for all
+            link_types: Types of links to analyze ['website', 'whitepaper', 'medium', 'reddit'] or None for all
             max_projects: Maximum number of projects to analyze (None for unlimited)
             
         Returns:
@@ -652,7 +803,8 @@ class ContentAnalysisPipeline:
                 'failed_analyses': 0,
                 'websites_analyzed': 0,
                 'whitepapers_analyzed': 0,
-                'medium_analyzed': 0
+                'medium_analyzed': 0,
+                'reddit_analyzed': 0
             }
         
         # Process each project
@@ -661,6 +813,7 @@ class ContentAnalysisPipeline:
         websites_analyzed = 0
         whitepapers_analyzed = 0
         medium_analyzed = 0
+        reddit_analyzed = 0
         
         for i, (project, link) in enumerate(projects_to_analyze):
             logger.info(f"Processing {i+1}/{len(projects_to_analyze)}: {project.name} ({link.link_type})")
@@ -675,6 +828,8 @@ class ContentAnalysisPipeline:
                     whitepapers_analyzed += 1
                 elif link.link_type == 'medium':
                     medium_analyzed += 1
+                elif link.link_type == 'reddit':
+                    reddit_analyzed += 1
             else:
                 failed_analyses += 1
             
@@ -689,11 +844,12 @@ class ContentAnalysisPipeline:
             'failed_analyses': failed_analyses,
             'websites_analyzed': websites_analyzed,
             'whitepapers_analyzed': whitepapers_analyzed,
-            'medium_analyzed': medium_analyzed
+            'medium_analyzed': medium_analyzed,
+            'reddit_analyzed': reddit_analyzed
         }
         
         logger.info(f"Batch complete: {successful_analyses} successful, {failed_analyses} failed")
-        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications")
+        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications, {reddit_analyzed} reddit communities")
         return stats
 
 
@@ -732,6 +888,7 @@ def main():
     print(f"Websites analyzed: {stats['websites_analyzed']}")
     print(f"Whitepapers analyzed: {stats['whitepapers_analyzed']}")
     print(f"Medium publications analyzed: {stats['medium_analyzed']}")
+    print(f"Reddit communities analyzed: {stats['reddit_analyzed']}")
     print(f"Success rate: {stats['successful_analyses']/stats['projects_found']*100:.1f}%" if stats['projects_found'] > 0 else "N/A")
 
 
