@@ -27,6 +27,18 @@ DEFAULT_MODEL=gpt-3.5-turbo
 MAX_TOKENS=2000
 TEMPERATURE=0.7
 
+# Reddit API Settings (required for Reddit scraping)
+# To get these credentials:
+# 1. Go to https://www.reddit.com/prefs/apps
+# 2. Click "Create App" or "Create Another App"
+# 3. Choose "script" as the app type
+# 4. Fill in name and description
+# 5. Use http://localhost as redirect URI
+# 6. Copy the client ID (under the app name) and client secret
+REDDIT_CLIENT_ID=mMdztMdzVl7ZzlQcegXEUA
+REDDIT_CLIENT_SECRET=5Ch1-XMzAp4OB5_jMlhSDF9gLs0yDw
+REDDIT_USER_AGENT=crypto-analytics-scraper/1.0 by u/jr00t
+
 # Local LLM Settings
 OPEN_WEBUI_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImQ4N2FjYjY0LWI5MjktNDdmZi1iYmY4LWI5MTM4NTNjMGE2ZSJ9.xNWEOZUze8k4GvzHyh8nCcsMBWTYxe-4mAeK_iMKEZM
 OPEN_WEBUI_API_URL=http://localhost:3002

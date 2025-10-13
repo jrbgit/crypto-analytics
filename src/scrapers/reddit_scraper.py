@@ -115,23 +115,42 @@ class RedditScraper:
         self.rate_limit_delay = rate_limit_delay
         
         # Initialize Reddit API client
-        # Using read-only mode with minimal configuration
+        # Using read-only mode with proper credentials
+        self.reddit_available = False
         try:
+            client_id = os.getenv('REDDIT_CLIENT_ID')
+            client_secret = os.getenv('REDDIT_CLIENT_SECRET')
+            user_agent = os.getenv('REDDIT_USER_AGENT', 'crypto-analytics-scraper/1.0')
+            
+            if not client_id or not client_secret or client_id == 'your_reddit_client_id_here':
+                logger.warning("Reddit API credentials not properly configured")
+                logger.info("Please set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in config/env")
+                self.reddit = None
+                return
+            
             self.reddit = praw.Reddit(
-                client_id=os.getenv('REDDIT_CLIENT_ID', 'crypto-analytics'),
-                client_secret=os.getenv('REDDIT_CLIENT_SECRET', 'not-needed-for-read-only'),
-                user_agent='crypto-analytics-scraper/1.0 by u/crypto-analyst',
+                client_id=client_id,
+                client_secret=client_secret,
+                user_agent=user_agent,
                 check_for_async=False,
-                # These settings help with read-only access
+                # Read-only mode settings
                 username=None,
                 password=None
             )
-            # Test connection
+            
+            # Test connection by accessing a public subreddit
+            test_sub = self.reddit.subreddit('test')
+            _ = test_sub.display_name  # This will fail if credentials are invalid
+            
             self.reddit.read_only = True
-            logger.info("Reddit API connection initialized in read-only mode")
+            self.reddit_available = True
+            logger.info("Reddit API connection initialized successfully in read-only mode")
+            
         except Exception as e:
-            logger.warning(f"Reddit API initialization issue: {e}")
-            logger.info("Will attempt to continue with basic functionality")
+            logger.error(f"Reddit API initialization failed: {e}")
+            logger.info("Reddit scraping will be disabled. Please check your API credentials.")
+            self.reddit = None
+            self.reddit_available = False
         
         # Keywords for classifying post types
         self.technical_keywords = [
@@ -254,6 +273,10 @@ class RedditScraper:
     
     def get_subreddit_info(self, subreddit_name: str) -> Optional[SubredditInfo]:
         """Get information about a subreddit."""
+        if not self.reddit_available or not self.reddit:
+            logger.warning(f"Reddit API not available for subreddit info: {subreddit_name}")
+            return None
+            
         try:
             subreddit = self.reddit.subreddit(subreddit_name)
             
@@ -292,6 +315,10 @@ class RedditScraper:
         Returns:
             List of RedditPost objects
         """
+        if not self.reddit_available or not self.reddit:
+            logger.error(f"Reddit API not available for scraping r/{subreddit_name}")
+            return []
+            
         try:
             logger.info(f"Scraping posts from r/{subreddit_name}")
             
@@ -377,7 +404,15 @@ class RedditScraper:
             return posts
             
         except Exception as e:
-            logger.error(f"Error scraping r/{subreddit_name}: {e}")
+            error_msg = str(e)
+            if "403" in error_msg or "received 403 HTTP response" in error_msg:
+                logger.warning(f"Access denied to r/{subreddit_name} (403 Forbidden) - subreddit may be private or restricted")
+            elif "404" in error_msg or "received 404 HTTP response" in error_msg:
+                logger.warning(f"Subreddit r/{subreddit_name} not found (404)")
+            elif "401" in error_msg or "received 401 HTTP response" in error_msg:
+                logger.error(f"Authentication failed for r/{subreddit_name} - check API credentials")
+            else:
+                logger.error(f"Error scraping r/{subreddit_name}: {e}")
             return []
     
     def calculate_community_metrics(self, posts: List[RedditPost], subreddit_info: Optional[SubredditInfo]) -> Dict:
@@ -445,6 +480,20 @@ class RedditScraper:
         """
         logger.info(f"Starting Reddit analysis for: {reddit_url}")
         
+        # Check if Reddit API is available
+        if not self.reddit_available or not self.reddit:
+            subreddit_name = self.extract_subreddit_from_url(reddit_url) or "unknown"
+            return RedditAnalysisResult(
+                subreddit_name=subreddit_name,
+                subreddit_url=reddit_url,
+                subreddit_info=None,
+                posts_analyzed=[],
+                total_posts=0,
+                scrape_success=False,
+                error_message="Reddit API not available - please configure API credentials",
+                analysis_timestamp=datetime.now(UTC)
+            )
+        
         try:
             # Extract subreddit name
             subreddit_name = self.extract_subreddit_from_url(reddit_url)
@@ -467,6 +516,11 @@ class RedditScraper:
             posts = self.scrape_subreddit_posts(subreddit_name)
             
             if not posts:
+                # Determine more specific error message
+                error_message = "No posts found or subreddit access failed"
+                if subreddit_info is None:
+                    error_message = "Subreddit access restricted (private/banned) or does not exist"
+                
                 return RedditAnalysisResult(
                     subreddit_name=subreddit_name,
                     subreddit_url=reddit_url,
@@ -474,7 +528,7 @@ class RedditScraper:
                     posts_analyzed=[],
                     total_posts=0,
                     scrape_success=False,
-                    error_message="No posts found or subreddit access failed",
+                    error_message=error_message,
                     analysis_timestamp=datetime.now(UTC)
                 )
             
