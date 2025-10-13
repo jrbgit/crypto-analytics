@@ -144,36 +144,68 @@ class ProjectChange(Base):
 
 
 class LinkContentAnalysis(Base):
-    """LLM analysis results for scraped link content."""
+    """Comprehensive LLM analysis results for scraped website content."""
     
     __tablename__ = 'link_content_analysis'
     
     id = Column(Integer, primary_key=True)
     link_id = Column(Integer, ForeignKey('project_links.id'), nullable=False)
     
-    # Scraped content
+    # Scraped content metadata
     raw_content = Column(Text)
     content_hash = Column(String(64))  # SHA256 hash to detect changes
     page_title = Column(String(500))
     meta_description = Column(Text)
+    pages_analyzed = Column(Integer, default=1)
+    total_word_count = Column(Integer)
     
-    # LLM analysis results
-    summary = Column(Text)
-    key_points = Column(JSON)  # List of key insights
+    # Core technology information
+    technology_stack = Column(JSON)  # List of technologies
+    blockchain_platform = Column(String(100))
+    consensus_mechanism = Column(String(100))
+    
+    # Key value propositions
+    core_features = Column(JSON)  # Main features/capabilities
+    use_cases = Column(JSON)  # Primary use cases
+    unique_value_proposition = Column(Text)
+    target_audience = Column(JSON)  # Target market segments
+    
+    # Team and organization
+    team_members = Column(JSON)  # [{"name": "...", "role": "...", "background": "..."}]
+    founders = Column(JSON)  # Founder names
+    team_size_estimate = Column(Integer)
+    advisors = Column(JSON)  # Advisor names
+    
+    # Business information
+    partnerships = Column(JSON)  # Strategic partnerships
+    investors = Column(JSON)  # Investment firms/angels
+    funding_raised = Column(String(200))  # Funding information
+    
+    # Development and innovation
+    innovations = Column(JSON)  # Novel approaches or features
+    development_stage = Column(String(50))  # concept, development, testnet, mainnet, mature
+    roadmap_items = Column(JSON)  # Key roadmap milestones
+    
+    # Analysis scores and metadata
+    technical_depth_score = Column(Integer)  # 1-10
+    marketing_vs_tech_ratio = Column(Float)  # 0-1
+    content_quality_score = Column(Integer)  # 1-10
+    red_flags = Column(JSON)  # Potential concerns or warning signs
+    confidence_score = Column(Float)  # 0-1
+    
+    # Legacy fields for backward compatibility
+    summary = Column(Text)  # Overall summary
+    key_points = Column(JSON)  # Key insights
     sentiment_score = Column(Float)  # -1 to 1
     categories = Column(JSON)  # Detected categories
     entities = Column(JSON)  # Named entities
     recent_updates = Column(JSON)  # Recent developments
-    
-    # Technical details (for whitepapers)
-    technical_summary = Column(Text)
-    innovations = Column(JSON)
-    use_cases = Column(JSON)
+    technical_summary = Column(Text)  # Technical summary
     
     # Analysis metadata
     model_used = Column(String(50))
     tokens_consumed = Column(Integer)
-    analysis_version = Column(String(20), default='1.0')
+    analysis_version = Column(String(20), default='2.0')
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -273,9 +305,12 @@ class DatabaseManager:
         return self.SessionLocal()
         
     def track_change(self, session, project: CryptoProject, field_name: str, 
-                    old_value: Any, new_value: Any, data_source: str = 'livecoinwatch'):
+                    old_value: Any, new_value: Any, data_source: str = 'livecoinwatch',
+                    change_type: str = 'UPDATE'):
         """Track changes to project data."""
-        if old_value != new_value:
+        # For INSERT operations, always track regardless of old_value
+        # For UPDATE operations, only track when values are different
+        if change_type == 'INSERT' or old_value != new_value:
             # Serialize values before creating the ProjectChange object
             serialized_old = str(old_value) if old_value is not None else None
             serialized_new = str(new_value) if new_value is not None else None
@@ -285,7 +320,7 @@ class DatabaseManager:
                 field_name=field_name,
                 old_value=serialized_old,
                 new_value=serialized_new,
-                change_type='UPDATE',
+                change_type=change_type,
                 data_source=data_source
             )
             session.add(change)

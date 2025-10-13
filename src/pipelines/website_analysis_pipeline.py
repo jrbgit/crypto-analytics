@@ -302,14 +302,16 @@ class WebsiteAnalysisPipeline:
         Run a batch of website analyses.
         
         Args:
-            max_projects: Maximum number of projects to analyze
+            max_projects: Maximum number of projects to analyze (None for unlimited)
             
         Returns:
             Dictionary with analysis statistics
         """
-        max_projects = max_projects or self.max_projects_per_run
-        
-        logger.info(f"Starting website analysis batch (max {max_projects} projects)")
+        if max_projects is None:
+            logger.info("Starting website analysis batch (processing ALL projects)")
+        else:
+            max_projects = max_projects or self.max_projects_per_run
+            logger.info(f"Starting website analysis batch (max {max_projects} projects)")
         
         # Discover projects for analysis
         projects_to_analyze = self.discover_projects_for_analysis(limit=max_projects)
@@ -352,7 +354,7 @@ class WebsiteAnalysisPipeline:
 
 
 def main():
-    """Test the website analysis pipeline."""
+    """Run the website analysis pipeline on all projects waiting for analysis."""
     # Initialize database
     database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')
     db_manager = DatabaseManager(database_url)
@@ -364,14 +366,26 @@ def main():
         analyzer_config={'provider': 'ollama', 'model': 'llama3.1:latest', 'ollama_base_url': 'http://localhost:11434'}
     )
     
-    # Run a small test batch
-    logger.info("Running website analysis pipeline test")
-    stats = pipeline.run_analysis_batch(max_projects=3)
+    # First, check how many projects are waiting for analysis
+    projects_waiting = pipeline.discover_projects_for_analysis()
+    total_projects = len(projects_waiting)
     
-    print(f"\n=== Analysis Results ===")
+    if total_projects == 0:
+        print("No projects are waiting for website analysis.")
+        return
+    
+    print(f"Found {total_projects} projects waiting for website analysis.")
+    print(f"This will take approximately {total_projects * 15 // 60} minutes to complete.")
+    
+    # Run analysis on all projects (remove the limit)
+    logger.info(f"Running website analysis pipeline on all {total_projects} projects")
+    stats = pipeline.run_analysis_batch(max_projects=None)  # No limit - process all
+    
+    print(f"\n=== Final Analysis Results ===")
     print(f"Projects found: {stats['projects_found']}")
     print(f"Successful analyses: {stats['successful_analyses']}")
     print(f"Failed analyses: {stats['failed_analyses']}")
+    print(f"Success rate: {stats['successful_analyses']/stats['projects_found']*100:.1f}%" if stats['projects_found'] > 0 else "N/A")
 
 
 if __name__ == "__main__":

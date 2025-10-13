@@ -174,6 +174,8 @@ class LiveCoinWatchClient:
             # Check if project exists
             existing_project = session.query(CryptoProject).filter_by(code=coin_data['code']).first()
             
+            is_new_project = existing_project is None
+            
             if existing_project:
                 project = existing_project
                 # Track changes for existing project
@@ -221,6 +223,10 @@ class LiveCoinWatchClient:
             
             # Flush to get the project ID before processing related data
             session.flush()
+            
+            # Track new project creation
+            if is_new_project:
+                self._track_new_project_creation(session, project, coin_data)
             
             # Process links
             self._process_links(session, project, coin_data.get('links', {}))
@@ -277,6 +283,39 @@ class LiveCoinWatchClient:
             if old_value != new_value and new_value is not None:
                 self.db_manager.track_change(
                     session, project, db_field, old_value, new_value
+                )
+    
+    def _track_new_project_creation(self, session, project: CryptoProject, coin_data: Dict):
+        """Track the creation of a new cryptocurrency project."""
+        
+        # Log the project creation as an INSERT change
+        self.db_manager.track_change(
+            session=session,
+            project=project,
+            field_name='project_created',
+            old_value=None,
+            new_value=f"New cryptocurrency project: {coin_data.get('name', 'Unknown')} ({project.code})",
+            change_type='INSERT'
+        )
+        
+        # Optionally track key initial values as INSERT changes
+        initial_fields = {
+            'name': coin_data.get('name'),
+            'rank': coin_data.get('rank'),
+            'current_price': coin_data.get('rate'),
+            'market_cap': coin_data.get('cap'),
+            'volume_24h': coin_data.get('volume')
+        }
+        
+        for field_name, value in initial_fields.items():
+            if value is not None:
+                self.db_manager.track_change(
+                    session=session,
+                    project=project,
+                    field_name=field_name,
+                    old_value=None,
+                    new_value=value,
+                    change_type='INSERT'
                 )
     
     def _process_links(self, session, project: CryptoProject, links_data: Dict):
@@ -337,7 +376,7 @@ class LiveCoinWatchClient:
         projects = []
         
         # Get coins in batches to stay within rate limits
-        batch_size = 50
+        batch_size = 100  # LiveCoinWatch API limit
         for offset in range(0, limit, batch_size):
             current_batch_size = min(batch_size, limit - offset)
             
@@ -379,7 +418,7 @@ class LiveCoinWatchClient:
         
         logger.info(f"Starting collection of all available coins (starting from offset {start_offset})")
         projects = []
-        batch_size = 50  # API limit per request
+        batch_size = 100  # LiveCoinWatch API limit per request
         offset = start_offset
         consecutive_empty_batches = 0
         max_empty_batches = 3  # Stop after 3 consecutive empty batches
@@ -486,9 +525,9 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='LiveCoinWatch Data Collector')
     parser.add_argument('--all', action='store_true', 
-                       help='Collect all available cryptocurrencies (default: top 50)')
-    parser.add_argument('--limit', type=int, default=50,
-                       help='Maximum number of coins to collect (default: 50)')
+                       help='Collect all available cryptocurrencies (default: top 100)')
+    parser.add_argument('--limit', type=int, default=100,
+                       help='Maximum number of coins to collect (default: 100)')
     parser.add_argument('--max-coins', type=int,
                        help='Maximum coins when using --all (overrides API limits)')
     parser.add_argument('--offset', type=int, default=0,
