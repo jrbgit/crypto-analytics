@@ -193,6 +193,47 @@ class LinkContentAnalysis(Base):
     red_flags = Column(JSON)  # Potential concerns or warning signs
     confidence_score = Column(Float)  # 0-1
     
+    # Whitepaper-specific fields
+    document_structure_score = Column(Integer)  # 1-10, organization and clarity
+    document_type = Column(String(20))  # 'pdf', 'webpage', etc.
+    page_count = Column(Integer)  # For PDFs
+    extraction_method = Column(String(50))  # Which method was used to extract content
+    
+    # Tokenomics and economics
+    has_tokenomics = Column(Boolean, default=False)
+    tokenomics_summary = Column(Text)
+    token_distribution_described = Column(Boolean, default=False)
+    economic_model_clarity = Column(Integer)  # 1-10
+    
+    # Use case and value proposition (enhanced)
+    use_case_viability_score = Column(Integer)  # 1-10
+    target_market_defined = Column(Boolean, default=False)
+    
+    # Technical innovation (enhanced)
+    technical_innovations_score = Column(Integer)  # 1-10
+    implementation_details_score = Column(Integer)  # 1-10
+    
+    # Competitive analysis
+    has_competitive_analysis = Column(Boolean, default=False)
+    competitors_mentioned = Column(JSON)  # List of competitors
+    competitive_advantages_claimed = Column(JSON)  # List of claimed advantages
+    
+    # Team and development (enhanced)
+    team_described = Column(Boolean, default=False)
+    team_expertise_apparent = Column(Boolean, default=False)
+    development_roadmap_present = Column(Boolean, default=False)
+    roadmap_specificity = Column(Integer)  # 1-10
+    
+    # Risk and validation
+    plagiarism_indicators = Column(JSON)  # Signs of copied content
+    vague_claims = Column(JSON)  # Vague or unsubstantiated claims
+    unrealistic_promises = Column(JSON)  # Promises that seem unrealistic
+    
+    # Market and adoption
+    market_size_analysis = Column(Boolean, default=False)
+    adoption_strategy_described = Column(Boolean, default=False)
+    partnerships_mentioned = Column(JSON)  # Partnerships mentioned in document
+    
     # Legacy fields for backward compatibility
     summary = Column(Text)  # Overall summary
     key_points = Column(JSON)  # Key insights
