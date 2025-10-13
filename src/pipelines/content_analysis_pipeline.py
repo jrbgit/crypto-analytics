@@ -30,8 +30,10 @@ from sqlalchemy import and_, or_, select
 from models.database import DatabaseManager, CryptoProject, ProjectLink, LinkContentAnalysis, APIUsage
 from scrapers.website_scraper import WebsiteScraper, WebsiteAnalysisResult
 from scrapers.whitepaper_scraper import WhitepaperScraper, WhitepaperContent
+from scrapers.medium_scraper import MediumScraper, MediumAnalysisResult
 from analyzers.website_analyzer import WebsiteContentAnalyzer, WebsiteAnalysis
 from analyzers.whitepaper_analyzer import WhitepaperContentAnalyzer, WhitepaperAnalysis
+from analyzers.medium_analyzer import MediumContentAnalyzer, MediumAnalysis
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -66,6 +68,11 @@ class ContentAnalysisPipeline:
             timeout=scraper_config.get('timeout', 30),
             max_file_size=scraper_config.get('max_file_size', 50 * 1024 * 1024)
         )
+        self.medium_scraper = MediumScraper(
+            max_articles=scraper_config.get('max_articles', 20),
+            recent_days=scraper_config.get('recent_days', 90),
+            delay=scraper_config.get('delay', 2.0)
+        )
         
         # Initialize analyzers
         analyzer_config = analyzer_config or {}
@@ -75,6 +82,11 @@ class ContentAnalysisPipeline:
             ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
         )
         self.whitepaper_analyzer = WhitepaperContentAnalyzer(
+            provider=analyzer_config.get('provider', 'ollama'),
+            model=analyzer_config.get('model', 'llama3.1:latest'),
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+        )
+        self.medium_analyzer = MediumContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
             ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
@@ -96,7 +108,7 @@ class ContentAnalysisPipeline:
             List of (project, link) tuples ready for analysis
         """
         if link_types is None:
-            link_types = ['website', 'whitepaper']
+            link_types = ['website', 'whitepaper', 'medium']
             
         with self.db_manager.get_session() as session:
             # Query for projects with links that need analysis
@@ -154,6 +166,8 @@ class ContentAnalysisPipeline:
                 return self._analyze_website(project, link)
             elif link.link_type == 'whitepaper':
                 return self._analyze_whitepaper(project, link)
+            elif link.link_type == 'medium':
+                return self._analyze_medium(project, link)
             else:
                 logger.warning(f"Unsupported link type: {link.link_type}")
                 return None
@@ -238,6 +252,41 @@ class ContentAnalysisPipeline:
         self._log_whitepaper_analysis_usage(whitepaper_analysis)
         
         logger.success(f"Whitepaper analysis complete for {project.name}: Technical depth {whitepaper_analysis.technical_depth_score}/10")
+        
+        return analysis_record
+    
+    def _analyze_medium(self, project: CryptoProject, medium_link: ProjectLink) -> Optional[LinkContentAnalysis]:
+        """Analyze a Medium publication link."""
+        # Step 1: Scrape the Medium publication
+        scrape_result = self.medium_scraper.scrape_medium_publication(medium_link.url)
+        
+        if not scrape_result.scrape_success:
+            logger.error(f"Medium scraping failed for {medium_link.url}: {scrape_result.error_message}")
+            self._update_scrape_status(medium_link, success=False, error=scrape_result.error_message)
+            return None
+        
+        # Step 2: Analyze with LLM
+        medium_analysis = self.medium_analyzer.analyze_medium_publication(scrape_result)
+        
+        if not medium_analysis:
+            logger.error(f"Medium LLM analysis failed for {medium_link.url}")
+            self._update_scrape_status(medium_link, success=False, error="LLM analysis failed")
+            return None
+        
+        # Step 3: Store results in database
+        analysis_record = self._store_medium_analysis_results(
+            medium_link,
+            scrape_result,
+            medium_analysis
+        )
+        
+        # Step 4: Update scrape status
+        self._update_scrape_status(medium_link, success=True)
+        
+        # Step 5: Log API usage
+        self._log_medium_analysis_usage(medium_analysis)
+        
+        logger.success(f"Medium analysis complete for {project.name}: Engagement score {medium_analysis.community_engagement_score}/10")
         
         return analysis_record
     
@@ -475,12 +524,112 @@ class ContentAnalysisPipeline:
             session.add(usage)
             session.commit()
     
+    def _store_medium_analysis_results(self,
+                                     medium_link: ProjectLink,
+                                     scrape_result: MediumAnalysisResult,
+                                     medium_analysis: MediumAnalysis) -> LinkContentAnalysis:
+        """Store Medium analysis results in the database."""
+        
+        with self.db_manager.get_session() as session:
+            # Combine article content for storage
+            combined_content = "\n\n".join([
+                f"=== {article.title} ({article.published_date.strftime('%Y-%m-%d')}) ===\n{article.content[:1000]}..."
+                for article in scrape_result.articles_found
+            ])
+            
+            # Calculate content hash based on publication and recent content
+            content_hash = hashlib.sha256(f"{scrape_result.publication_url}_{scrape_result.last_post_date}".encode()).hexdigest()
+            
+            # Check if we already have analysis for this content
+            existing = session.query(LinkContentAnalysis).filter(
+                and_(
+                    LinkContentAnalysis.link_id == medium_link.id,
+                    LinkContentAnalysis.content_hash == content_hash
+                )
+            ).first()
+            
+            if existing:
+                logger.info(f"Content unchanged for {medium_link.url}, skipping analysis storage")
+                return existing
+            
+            # Create new analysis record with Medium-specific data
+            analysis_record = LinkContentAnalysis(
+                link_id=medium_link.id,
+                
+                # Content metadata
+                raw_content=combined_content[:50000],  # Limit size for database
+                content_hash=content_hash,
+                page_title=f"{medium_analysis.publication_name} - Medium Publication",
+                pages_analyzed=medium_analysis.total_articles_analyzed,
+                total_word_count=sum(article.word_count for article in scrape_result.articles_found),
+                
+                # Document info
+                document_type='medium_publication',
+                extraction_method='medium_scraper',
+                
+                # Analysis scores adapted for Medium
+                technical_depth_score=medium_analysis.development_activity_score,  # Map development activity to technical depth
+                content_quality_score=medium_analysis.content_quality_score,
+                confidence_score=medium_analysis.confidence_score,
+                
+                # Medium-specific insights mapped to existing fields
+                use_cases=medium_analysis.educational_content,  # Educational content as use cases
+                partnerships=medium_analysis.partnership_announcements,
+                roadmap_items=medium_analysis.roadmap_mentions,
+                recent_updates=medium_analysis.recent_development_mentions,
+                red_flags=medium_analysis.red_flags + medium_analysis.spam_indicators + medium_analysis.misleading_claims,
+                
+                # Sentiment and engagement (map to existing fields)
+                sentiment_score=medium_analysis.overall_sentiment_score,
+                categories=list(medium_analysis.content_breakdown.keys()),
+                entities=medium_analysis.competitive_mentions,
+                
+                # Store Medium-specific data in JSON fields
+                summary=f"Medium publication analysis: {medium_analysis.total_articles_analyzed} articles analyzed over {medium_analysis.analysis_period_days} days. Publication frequency: {medium_analysis.publication_frequency:.1f}/week. Technical content: {medium_analysis.technical_content_percentage:.1f}%",
+                technical_summary=f"Development activity score: {medium_analysis.development_activity_score}/10. Recent mentions: {len(medium_analysis.recent_development_mentions)} topics. Community engagement: {medium_analysis.community_engagement_score}/10",
+                key_points=(
+                    [f"Engagement: {medium_analysis.community_engagement_score}/10"] +
+                    [f"Development activity: {medium_analysis.development_activity_score}/10"] +
+                    [f"Publication freq: {medium_analysis.publication_frequency:.1f}/week"] +
+                    [f"Technical content: {medium_analysis.technical_content_percentage:.1f}%"] +
+                    medium_analysis.team_activity_indicators[:3]  # Top 3 activity indicators
+                ),
+                
+                # Analysis metadata
+                model_used=medium_analysis.model_used,
+                analysis_version='2.2'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            
+            logger.success(f"Stored Medium analysis results for {medium_link.url}")
+            return analysis_record
+    
+    def _log_medium_analysis_usage(self, medium_analysis: MediumAnalysis):
+        """Log Medium LLM API usage for cost tracking."""
+        with self.db_manager.get_session() as session:
+            # Estimate token usage based on articles analyzed
+            estimated_tokens = medium_analysis.articles_with_detailed_analysis * 1500  # Rough estimate per detailed article
+            
+            usage = APIUsage(
+                api_provider=self.medium_analyzer.provider,
+                endpoint='medium_analysis',
+                response_status=200,
+                credits_used=1,
+                response_size=estimated_tokens,
+                response_time=0.0  # We don't track this currently
+            )
+            
+            session.add(usage)
+            session.commit()
+    
     def run_analysis_batch(self, link_types: List[str] = None, max_projects: int = None) -> Dict[str, int]:
         """
         Run a batch of content analyses.
         
         Args:
-            link_types: Types of links to analyze ['website', 'whitepaper'] or None for both
+            link_types: Types of links to analyze ['website', 'whitepaper', 'medium'] or None for all
             max_projects: Maximum number of projects to analyze (None for unlimited)
             
         Returns:
@@ -502,7 +651,8 @@ class ContentAnalysisPipeline:
                 'successful_analyses': 0,
                 'failed_analyses': 0,
                 'websites_analyzed': 0,
-                'whitepapers_analyzed': 0
+                'whitepapers_analyzed': 0,
+                'medium_analyzed': 0
             }
         
         # Process each project
@@ -510,6 +660,7 @@ class ContentAnalysisPipeline:
         failed_analyses = 0
         websites_analyzed = 0
         whitepapers_analyzed = 0
+        medium_analyzed = 0
         
         for i, (project, link) in enumerate(projects_to_analyze):
             logger.info(f"Processing {i+1}/{len(projects_to_analyze)}: {project.name} ({link.link_type})")
@@ -522,6 +673,8 @@ class ContentAnalysisPipeline:
                     websites_analyzed += 1
                 elif link.link_type == 'whitepaper':
                     whitepapers_analyzed += 1
+                elif link.link_type == 'medium':
+                    medium_analyzed += 1
             else:
                 failed_analyses += 1
             
@@ -535,11 +688,12 @@ class ContentAnalysisPipeline:
             'successful_analyses': successful_analyses,
             'failed_analyses': failed_analyses,
             'websites_analyzed': websites_analyzed,
-            'whitepapers_analyzed': whitepapers_analyzed
+            'whitepapers_analyzed': whitepapers_analyzed,
+            'medium_analyzed': medium_analyzed
         }
         
         logger.info(f"Batch complete: {successful_analyses} successful, {failed_analyses} failed")
-        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers")
+        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications")
         return stats
 
 
@@ -577,6 +731,7 @@ def main():
     print(f"Failed analyses: {stats['failed_analyses']}")
     print(f"Websites analyzed: {stats['websites_analyzed']}")
     print(f"Whitepapers analyzed: {stats['whitepapers_analyzed']}")
+    print(f"Medium publications analyzed: {stats['medium_analyzed']}")
     print(f"Success rate: {stats['successful_analyses']/stats['projects_found']*100:.1f}%" if stats['projects_found'] > 0 else "N/A")
 
 
