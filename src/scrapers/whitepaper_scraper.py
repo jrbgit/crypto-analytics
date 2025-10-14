@@ -40,6 +40,9 @@ except ImportError:
 
 from bs4 import BeautifulSoup
 
+# Import URL filter
+from utils.url_filter import url_filter
+
 
 @dataclass
 class WhitepaperContent:
@@ -90,6 +93,22 @@ class WhitepaperScraper:
         """
         try:
             logger.info(f"Starting whitepaper extraction for {url}")
+            
+            # Check URL filter first
+            should_skip, skip_reason = url_filter.should_skip_url(url)
+            if should_skip:
+                return WhitepaperContent(
+                    url=url,
+                    content_type='unknown',
+                    title=None,
+                    content='',
+                    word_count=0,
+                    page_count=None,
+                    content_hash='',
+                    extraction_method='none',
+                    success=False,
+                    error_message=f"URL filtered: {skip_reason}"
+                )
             
             # First, check what type of content we're dealing with
             response = self.session.head(url, timeout=self.timeout, allow_redirects=True)

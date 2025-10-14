@@ -348,7 +348,11 @@ class ContentAnalysisPipeline:
             link_obj.needs_analysis = False  # Mark as processed
             
             if not success and error:
-                logger.warning(f"Scrape failed for {link_obj.url}: {error}")
+                # Check if this is a filtering/skipping case vs actual error
+                if any(keyword in error.lower() for keyword in ['filtered', 'skipping', 'parked domain', 'minimal content']):
+                    logger.debug(f"Skipped {link_obj.url}: {error}")
+                else:
+                    logger.warning(f"Scrape failed for {link_obj.url}: {error}")
             
             session.commit()
     

@@ -27,6 +27,9 @@ from loguru import logger
 import re
 from urllib.parse import urlparse, urljoin
 
+# Import URL filter
+from utils.url_filter import url_filter
+
 
 @dataclass
 class ScrapedPage:
@@ -172,12 +175,22 @@ class WebsiteScraper:
                 not href.startswith('#') and  # Skip anchors
                 not href.startswith('mailto:') and  # Skip email links
                 not href.startswith('tel:')):  # Skip phone links
-                links.append(absolute_url)
+                
+                # Apply URL filter to each link
+                should_skip, _ = url_filter.should_skip_url(absolute_url)
+                if not should_skip:
+                    links.append(absolute_url)
         
         return content, title, list(set(links))  # Remove duplicates
     
     def fetch_page(self, url: str) -> Optional[ScrapedPage]:
         """Fetch and process a single page."""
+        # Check URL filter first
+        should_skip, skip_reason = url_filter.should_skip_url(url)
+        if should_skip:
+            logger.debug(f"Skipping {url}: {skip_reason}")
+            return None
+        
         if not self.can_fetch(url):
             logger.warning(f"Robots.txt disallows fetching {url}")
             return None
@@ -189,6 +202,16 @@ class WebsiteScraper:
             
             # Extract content
             content, title, links = self.extract_content(response.text, url)
+            
+            # Check if content indicates a parked domain
+            if url_filter.is_likely_parked_domain(content):
+                logger.warning(f"Detected parked/for-sale domain: {url}")
+                return None
+            
+            # Skip if content is too minimal
+            if len(content.strip()) < 50:
+                logger.debug(f"Skipping {url}: minimal content ({len(content)} chars)")
+                return None
             
             # Calculate content hash
             content_hash = hashlib.sha256(content.encode()).hexdigest()
