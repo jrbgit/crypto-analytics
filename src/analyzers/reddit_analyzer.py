@@ -285,18 +285,19 @@ Reddit community data to analyze:
         try:
             payload = {
                 "model": self.model,
-                "prompt": self.analysis_prompt + "\n\n" + content,
+                "prompt": self.analysis_prompt + "\n\n" + content + "\n\nIMPORTANT: Respond ONLY with valid JSON, no additional text or explanation.",
                 "stream": False,
                 "options": {
                     "temperature": 0.1,
                     "num_predict": 2500
-                }
+                },
+                "format": "json"  # Force JSON format
             }
             
             response = requests.post(
                 f"{self.ollama_base_url}/api/generate",
                 json=payload,
-                timeout=150  # Longer timeout for complex analysis
+                timeout=180  # Longer timeout for complex analysis
             )
             
             if response.status_code != 200:
@@ -304,29 +305,98 @@ Reddit community data to analyze:
                 return None
             
             response_data = response.json()
-            response_text = response_data.get('response', '')
+            response_text = response_data.get('response', '').strip()
             
-            # Try to find JSON in the response
+            # Log raw response for debugging
+            logger.debug(f"Raw Ollama response: {response_text[:200]}...")
+            
+            # Try to find and extract JSON
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}') + 1
             
             if start_idx == -1 or end_idx == 0:
                 logger.error("No JSON found in Ollama response")
-                logger.debug(f"Raw response: {response_text[:500]}...")
-                return None
+                logger.error(f"Full response: {response_text}")
+                # Return a fallback analysis
+                return self._create_fallback_analysis()
             
             json_str = response_text[start_idx:end_idx]
-            return json.loads(json_str)
+            
+            # Clean up common JSON issues
+            json_str = json_str.replace('\n', ' ').replace('\t', ' ')
+            # Fix common quote issues
+            json_str = json_str.replace('\\"', '"').replace("\'", "\"")
+            
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed: {e}")
+                logger.error(f"Problematic JSON: {json_str[:200]}...")
+                # Try to fix common JSON issues and retry
+                return self._try_fix_json(json_str)
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Ollama API request failed: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from Ollama response: {e}")
-            return None
+            return self._create_fallback_analysis()
         except Exception as e:
             logger.error(f"Ollama API call failed: {e}")
-            return None
+            return self._create_fallback_analysis()
+    
+    def _try_fix_json(self, json_str: str) -> Dict[str, Any]:
+        """Try to fix common JSON parsing issues."""
+        try:
+            # Common fixes
+            fixes = [
+                lambda x: x.replace(',]', ']'),
+                lambda x: x.replace(',}', '}'),
+                lambda x: x.replace(',,', ','),
+                lambda x: x.replace('""', '"'),
+                lambda x: x.replace(': """', ': "'),
+                lambda x: x.replace('""",', '",'),
+            ]
+            
+            fixed_json = json_str
+            for fix in fixes:
+                fixed_json = fix(fixed_json)
+            
+            return json.loads(fixed_json)
+        except:
+            logger.warning("Could not fix JSON, returning fallback analysis")
+            return self._create_fallback_analysis()
+    
+    def _create_fallback_analysis(self) -> Dict[str, Any]:
+        """Create a fallback analysis when LLM fails."""
+        return {
+            "community_health_score": 5,
+            "engagement_authenticity_score": 5,
+            "discussion_quality_score": 5,
+            "moderator_effectiveness_score": 5,
+            "technical_discussion_percentage": 20.0,
+            "hype_content_percentage": 40.0,
+            "news_content_percentage": 20.0,
+            "overall_sentiment_score": 0.0,
+            "community_confidence_level": "moderate",
+            "fud_indicators": ["LLM analysis failed - using fallback"],
+            "fomo_indicators": [],
+            "newcomer_friendliness_score": 5,
+            "echo_chamber_risk": "moderate",
+            "tribalism_indicators": [],
+            "constructive_criticism_presence": False,
+            "development_awareness_score": 5,
+            "project_milestone_discussions": [],
+            "technical_literacy_level": "moderate",
+            "roadmap_awareness_indicators": [],
+            "red_flags": ["Analysis incomplete due to technical issues"],
+            "manipulation_indicators": [],
+            "misinformation_presence": [],
+            "competitive_discussions": [],
+            "market_position_awareness": "fair",
+            "partnership_discussions": [],
+            "posting_frequency_trend": "stable",
+            "user_retention_indicators": [],
+            "seasonal_activity_patterns": {"status": "analysis_failed"},
+            "confidence_score": 0.1
+        }
     
     def _prepare_content_for_analysis(self, scrape_result: RedditAnalysisResult) -> str:
         """Prepare Reddit content for LLM analysis."""
