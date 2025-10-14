@@ -139,6 +139,11 @@ class URLFilter:
         except Exception:
             return True, "Invalid URL format"
         
+        # IMPORTANT: Never filter PDF files - they are valuable whitepaper content
+        # regardless of what directory they're in
+        if parsed.path.lower().endswith('.pdf'):
+            return False, None
+        
         # Check file extension
         skip_reason = self._check_file_extension(parsed.path)
         if skip_reason:

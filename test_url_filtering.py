@@ -39,12 +39,18 @@ def test_url_filtering():
         "https://crypto.com/test/debug",
         "https://blockchain.io/assets/style.css",
         
+        # PDF files in normally filtered directories (should NOT be filtered - PDFs are valuable!)
+        "https://www.coreum.com/assets/coreum_technical_paper.pdf",
+        "https://project.io/wp-content/uploads/whitepaper.pdf",
+        "https://crypto.com/static/documents/paper.pdf",
+        
         # Valid URLs (should NOT be filtered)
         "https://ethereum.org",
         "https://bitcoin.org/en/",
         "https://docs.ethereum.org/whitepaper",
         "https://uniswap.org/about",
         "https://compound.finance/docs",
+        "https://example.com/whitepaper.pdf",  # PDFs should always be allowed
         
         # Problematic URLs from logs (should be filtered)
         "https://www.kuma-inu.com/",  # This might be valid, but let's see
