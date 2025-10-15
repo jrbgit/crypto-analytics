@@ -4,7 +4,7 @@ Database models for crypto analytics with change tracking.
 
 from datetime import datetime
 from typing import Optional, Dict, Any
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, JSON, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, JSON, ForeignKey, NUMERIC
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,7 +20,7 @@ class CryptoProject(Base):
     __tablename__ = 'crypto_projects'
     
     id = Column(Integer, primary_key=True)
-    code = Column(String(20), unique=True, index=True)  # e.g., 'BTC', 'AVAX'
+    code = Column(String(100), unique=True, index=True)  # e.g., 'BTC', 'AVAX' - increased to handle long codes
     name = Column(String(200), nullable=False)
     
     # Basic project info
@@ -28,15 +28,15 @@ class CryptoProject(Base):
     age = Column(Integer)  # Days since launch
     color = Column(String(10))  # Hex color code
     
-    # Supply information
-    circulating_supply = Column(Float)
-    total_supply = Column(Float)
-    max_supply = Column(Float)
+    # Supply information (using NUMERIC for large values)
+    circulating_supply = Column(NUMERIC(30, 8))
+    total_supply = Column(NUMERIC(30, 8))
+    max_supply = Column(NUMERIC(30, 8))
     
-    # Market data
-    current_price = Column(Float)
-    market_cap = Column(Float)
-    volume_24h = Column(Float)
+    # Market data (using NUMERIC for precision and large values)
+    current_price = Column(NUMERIC(30, 8))
+    market_cap = Column(NUMERIC(30, 8))
+    volume_24h = Column(NUMERIC(30, 8))
     
     # Price deltas
     price_change_1h = Column(Float)
@@ -51,8 +51,8 @@ class CryptoProject(Base):
     markets_count = Column(Integer)
     pairs_count = Column(Integer)
     
-    # All time high
-    ath_usd = Column(Float)
+    # All time high (using NUMERIC to handle very large values)
+    ath_usd = Column(NUMERIC(30, 8))
     
     # Categories (stored as JSON array)
     categories = Column(JSON)

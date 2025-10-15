@@ -237,11 +237,10 @@ class LiveCoinWatchClient:
                 # Track changes for existing project
                 self._track_changes(session, project, coin_data)
             else:
-                # Create new project with sanitized code
-                sanitized_code = self._sanitize_string_value(coin_data['code'], 50, 'project_code')
-                project = CryptoProject(code=sanitized_code)
+                # Create new project (no need to sanitize code anymore with larger database limit)
+                project = CryptoProject(code=coin_data['code'])
                 session.add(project)
-                logger.info(f"Creating new project: {coin_data['name']} ({sanitized_code})")
+                logger.info(f"Creating new project: {coin_data['name']} ({coin_data['code']})")
             
             # Update project data (sanitize string fields)
             project.name = self._sanitize_string_value(coin_data.get('name'), 255, 'project_name')
