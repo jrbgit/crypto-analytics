@@ -193,8 +193,10 @@ class LiveCoinWatchClient:
     def _sanitize_numeric_value(self, value, field_name: str = "field"):
         """Sanitize numeric values to prevent PostgreSQL overflow.
         
-        PostgreSQL NUMERIC(40,8) can handle values up to 10^32.
-        Values exceeding this limit will be set to None with a warning.
+        Different fields have different precision limits:
+        - current_price, ath_usd: NUMERIC(50,20) - up to ~10^30
+        - total_supply, max_supply: NUMERIC(80,8) - up to ~10^72 
+        - Other fields: NUMERIC(40,8) - up to ~10^32
         """
         if value is None:
             return None
@@ -204,22 +206,32 @@ class LiveCoinWatchClient:
             if isinstance(value, str):
                 value = float(value)
             
-            # Check for extreme values (beyond NUMERIC(40,8) capacity)
-            # Use slightly less than 1e32 to account for precision and rounding
-            max_value = 9.9999999e31  # Safe maximum for NUMERIC(40,8)
-            min_value = -9.9999999e31
+            # Define precision limits for different field types
+            if field_name in ['current_price', 'ath_usd']:
+                # NUMERIC(50,20) - can handle values up to ~10^30
+                max_value = 9.9999999e29
+                precision_limit = 1e-20
+                precision_desc = "NUMERIC(50,20)"
+            elif field_name in ['total_supply', 'max_supply']:
+                # NUMERIC(80,8) - can handle values up to ~10^72
+                max_value = 9.9999999e71
+                precision_limit = 1e-8
+                precision_desc = "NUMERIC(80,8)"
+            else:
+                # NUMERIC(40,8) - can handle values up to ~10^32
+                max_value = 9.9999999e31
+                precision_limit = 1e-8
+                precision_desc = "NUMERIC(40,8)"
             
+            # Check for values exceeding the maximum
             if abs(value) >= max_value:
-                logger.warning(f"Value {value} for {field_name} exceeds database limits, setting to None")
+                logger.warning(f"Value {value} for {field_name} exceeds database limits ({precision_desc}), setting to None")
                 return None
             
             # Check for extremely small values (precision issues)
-            # Only warn for non-price fields that have lower precision (NUMERIC(40,8))
-            if abs(value) > 0 and abs(value) < 1e-8 and field_name not in ['current_price', 'ath_usd']:
-                logger.debug(f"Very small value {value} for {field_name}, may have precision issues with NUMERIC(40,8)")
+            if abs(value) > 0 and abs(value) < precision_limit:
+                logger.debug(f"Very small value {value} for {field_name}, approaching {precision_desc} precision limits")
                 # Still keep it, but note the potential precision loss
-            elif abs(value) > 0 and abs(value) < 1e-20 and field_name in ['current_price', 'ath_usd']:
-                logger.debug(f"Extremely small value {value} for {field_name}, approaching NUMERIC(40,20) precision limits")
             
             return value
             

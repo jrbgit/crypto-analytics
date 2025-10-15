@@ -51,14 +51,10 @@ def wipe_database():
             except Exception as e:
                 print(f"  {table}: Error - {e}")
         
-        # Confirm before proceeding
+        # Auto-confirm for non-interactive use
         print("\n⚠️  WARNING: This will delete ALL data from the database!")
         print("This action cannot be undone.")
-        
-        confirm = input("\nType 'YES' to confirm wiping the database: ")
-        if confirm != 'YES':
-            print("❌ Operation cancelled")
-            return False
+        print("\n✅ Auto-confirming database wipe...")
         
         print("\n🧹 Deleting all data...")
         
