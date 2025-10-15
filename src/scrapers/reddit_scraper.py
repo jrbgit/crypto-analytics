@@ -123,8 +123,9 @@ class RedditScraper:
             user_agent = os.getenv('REDDIT_USER_AGENT', 'crypto-analytics-scraper/1.0')
             
             if not client_id or not client_secret or client_id == 'your_reddit_client_id_here':
-                logger.warning("Reddit API credentials not properly configured")
-                logger.info("Please set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in config/env")
+                logger.warning("Reddit API credentials not properly configured - Reddit scraping disabled")
+                logger.info("💡 To enable Reddit analysis, set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in config/env")
+                logger.info("   Get credentials at: https://www.reddit.com/prefs/apps")
                 self.reddit = None
                 return
             
@@ -144,11 +145,19 @@ class RedditScraper:
             
             self.reddit.read_only = True
             self.reddit_available = True
-            logger.info("Reddit API connection initialized successfully in read-only mode")
+            logger.info("🔗 Reddit API connection initialized successfully in read-only mode")
             
         except Exception as e:
-            logger.error(f"Reddit API initialization failed: {e}")
-            logger.info("Reddit scraping will be disabled. Please check your API credentials.")
+            error_msg = str(e).lower()
+            if "401" in error_msg or "unauthorized" in error_msg:
+                logger.error(f"❌ Reddit API authentication failed - check your client_id and client_secret")
+                logger.info("   Verify credentials at: https://www.reddit.com/prefs/apps")
+            elif "403" in error_msg:
+                logger.error(f"❌ Reddit API access forbidden - check app permissions")
+            else:
+                logger.error(f"❌ Reddit API initialization failed: {e}")
+            
+            logger.info("📴 Reddit analysis disabled until API credentials are configured properly")
             self.reddit = None
             self.reddit_available = False
         
@@ -272,37 +281,92 @@ class RedditScraper:
         return sentiment_indicators
     
     def get_subreddit_info(self, subreddit_name: str) -> Optional[SubredditInfo]:
-        """Get information about a subreddit."""
+        """Get information about a subreddit with graceful error handling."""
         if not self.reddit_available or not self.reddit:
-            logger.warning(f"Reddit API not available for subreddit info: {subreddit_name}")
+            logger.debug(f"Reddit API not available for subreddit info: {subreddit_name}")
             return None
             
         try:
             subreddit = self.reddit.subreddit(subreddit_name)
             
-            # Get moderator count
-            moderator_count = len(list(subreddit.moderator()))
+            # Try to get basic info first (most likely to succeed)
+            basic_info = {
+                'name': subreddit.display_name,
+                'display_name': subreddit.display_name_prefixed,
+                'subscribers': getattr(subreddit, 'subscribers', 0),
+                'is_over18': getattr(subreddit, 'over18', False),
+                'created_utc': datetime.fromtimestamp(getattr(subreddit, 'created_utc', 0), tz=UTC) if getattr(subreddit, 'created_utc', 0) else datetime.now(UTC)
+            }
             
-            # Get rules count
-            rules_count = len(list(subreddit.rules))
+            # Try to get additional info (may fail with 403)
+            additional_info = {}
+            
+            # Safely get description
+            try:
+                additional_info['description'] = (subreddit.description or "")[:500]
+            except:
+                additional_info['description'] = ""
+            
+            # Safely get public description
+            try:
+                additional_info['public_description'] = (subreddit.public_description or "")[:200]
+            except:
+                additional_info['public_description'] = ""
+            
+            # Safely get active users
+            try:
+                additional_info['active_users'] = getattr(subreddit, 'accounts_active', 0)
+            except:
+                additional_info['active_users'] = 0
+            
+            # Safely get moderator count (often restricted)
+            try:
+                additional_info['moderator_count'] = len(list(subreddit.moderator()))
+            except:
+                additional_info['moderator_count'] = 0
+            
+            # Safely get rules count (often restricted)
+            try:
+                additional_info['rules_count'] = len(list(subreddit.rules))
+            except:
+                additional_info['rules_count'] = 0
             
             info = SubredditInfo(
-                name=subreddit.display_name,
-                display_name=subreddit.display_name_prefixed,
-                description=subreddit.description[:500] if subreddit.description else "",
-                subscribers=subreddit.subscribers,
-                active_users=subreddit.accounts_active if hasattr(subreddit, 'accounts_active') else 0,
-                created_utc=datetime.fromtimestamp(subreddit.created_utc, tz=UTC),
-                is_over18=subreddit.over18,
-                public_description=subreddit.public_description[:200] if subreddit.public_description else "",
-                moderator_count=moderator_count,
-                rules_count=rules_count
+                name=basic_info['name'],
+                display_name=basic_info['display_name'],
+                description=additional_info['description'],
+                subscribers=basic_info['subscribers'],
+                active_users=additional_info['active_users'],
+                created_utc=basic_info['created_utc'],
+                is_over18=basic_info['is_over18'],
+                public_description=additional_info['public_description'],
+                moderator_count=additional_info['moderator_count'],
+                rules_count=additional_info['rules_count']
             )
             
+            logger.debug(f"Retrieved subreddit info for r/{subreddit_name}")
             return info
             
         except Exception as e:
-            logger.warning(f"Could not get subreddit info for {subreddit_name}: {e}")
+            error_msg = str(e).lower()
+            
+            # Handle different error types with appropriate logging levels
+            if "403" in error_msg or "forbidden" in error_msg:
+                # 403 is expected for restricted subreddits - log as debug only
+                logger.debug(f"Subreddit info restricted for r/{subreddit_name} (403 Forbidden) - will attempt to scrape posts directly")
+            elif "404" in error_msg or "not found" in error_msg:
+                # 404 means subreddit doesn't exist - this is a real issue
+                logger.warning(f"Subreddit r/{subreddit_name} does not exist (404 Not Found)")
+            elif "401" in error_msg or "unauthorized" in error_msg:
+                # 401 means authentication problem - this needs attention
+                logger.error(f"Authentication failed for subreddit info r/{subreddit_name} - check Reddit API credentials")
+            elif "private" in error_msg:
+                # Private subreddit
+                logger.debug(f"Subreddit r/{subreddit_name} is private - will attempt to scrape posts if possible")
+            else:
+                # Other errors
+                logger.debug(f"Could not retrieve subreddit info for r/{subreddit_name}: {e}")
+                
             return None
     
     def scrape_subreddit_posts(self, subreddit_name: str) -> List[RedditPost]:
@@ -400,19 +464,41 @@ class RedditScraper:
                 if len(posts) >= self.max_posts:
                     break
             
-            logger.info(f"Successfully scraped {len(posts)} posts from r/{subreddit_name}")
+            if len(posts) > 0:
+                logger.success(f"Successfully scraped {len(posts)} posts from r/{subreddit_name}")
+            else:
+                logger.info(f"No recent posts found in r/{subreddit_name} (within last {self.recent_days} days)")
             return posts
             
         except Exception as e:
-            error_msg = str(e)
-            if "403" in error_msg or "received 403 HTTP response" in error_msg:
-                logger.warning(f"Access denied to r/{subreddit_name} (403 Forbidden) - subreddit may be private or restricted")
-            elif "404" in error_msg or "received 404 HTTP response" in error_msg:
-                logger.warning(f"Subreddit r/{subreddit_name} not found (404)")
-            elif "401" in error_msg or "received 401 HTTP response" in error_msg:
-                logger.error(f"Authentication failed for r/{subreddit_name} - check API credentials")
+            error_msg = str(e).lower()
+            
+            # Handle different error types with appropriate logging levels and retry logic
+            if "403" in error_msg or "forbidden" in error_msg:
+                # 403 for posts means subreddit is truly restricted (private/banned)
+                logger.warning(f"Access denied to r/{subreddit_name} posts (403 Forbidden) - subreddit is private, restricted, or banned")
+            elif "404" in error_msg or "not found" in error_msg:
+                # 404 means subreddit doesn't exist
+                logger.warning(f"Subreddit r/{subreddit_name} does not exist (404 Not Found)")
+            elif "401" in error_msg or "unauthorized" in error_msg:
+                # 401 means authentication problem - this needs immediate attention
+                logger.error(f"Authentication failed for r/{subreddit_name} - check Reddit API credentials (client_id/client_secret)")
+            elif "429" in error_msg or "rate limit" in error_msg:
+                # Rate limiting - suggest increasing delays
+                logger.warning(f"Rate limit exceeded for r/{subreddit_name} - consider increasing rate_limit_delay")
+            elif "private" in error_msg:
+                # Private subreddit
+                logger.warning(f"Subreddit r/{subreddit_name} is private and cannot be accessed")
+            elif "quarantined" in error_msg:
+                # Quarantined subreddit
+                logger.warning(f"Subreddit r/{subreddit_name} is quarantined and cannot be accessed with current credentials")
+            elif "banned" in error_msg:
+                # Banned subreddit
+                logger.warning(f"Subreddit r/{subreddit_name} is banned")
             else:
-                logger.error(f"Error scraping r/{subreddit_name}: {e}")
+                # Other unexpected errors
+                logger.error(f"Unexpected error scraping r/{subreddit_name}: {e}")
+                
             return []
     
     def calculate_community_metrics(self, posts: List[RedditPost], subreddit_info: Optional[SubredditInfo]) -> Dict:
@@ -483,6 +569,7 @@ class RedditScraper:
         # Check if Reddit API is available
         if not self.reddit_available or not self.reddit:
             subreddit_name = self.extract_subreddit_from_url(reddit_url) or "unknown"
+            logger.warning(f"🚫 Cannot analyze r/{subreddit_name} - Reddit API not configured")
             return RedditAnalysisResult(
                 subreddit_name=subreddit_name,
                 subreddit_url=reddit_url,
@@ -490,7 +577,7 @@ class RedditScraper:
                 posts_analyzed=[],
                 total_posts=0,
                 scrape_success=False,
-                error_message="Reddit API not available - please configure API credentials",
+                error_message="Reddit API not available - configure REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in config/env",
                 analysis_timestamp=datetime.now(UTC)
             )
         
@@ -515,11 +602,18 @@ class RedditScraper:
             # Scrape posts
             posts = self.scrape_subreddit_posts(subreddit_name)
             
+            # Log success context if subreddit info was restricted but posts worked
+            if not subreddit_info and posts:
+                logger.info(f"📊 Successfully analyzed r/{subreddit_name}: {len(posts)} posts scraped despite restricted subreddit info access")
+            elif subreddit_info and posts:
+                logger.debug(f"Complete analysis successful for r/{subreddit_name}: both subreddit info and posts retrieved")
+            
             if not posts:
-                # Determine more specific error message
-                error_message = "No posts found or subreddit access failed"
+                # Determine more specific error message based on what we learned
                 if subreddit_info is None:
-                    error_message = "Subreddit access restricted (private/banned) or does not exist"
+                    error_message = "Subreddit appears to be private, restricted, banned, or does not exist - no content accessible"
+                else:
+                    error_message = f"No recent posts found in r/{subreddit_name} within the last {self.recent_days} days"
                 
                 return RedditAnalysisResult(
                     subreddit_name=subreddit_name,
@@ -552,7 +646,18 @@ class RedditScraper:
                 sentiment_indicators=metrics['sentiment_indicators']
             )
             
-            logger.success(f"Reddit analysis complete for r/{subreddit_name}: {len(posts)} posts analyzed")
+            # Enhanced success logging with key metrics
+            success_msg = f"✅ Reddit analysis complete for r/{subreddit_name}: {len(posts)} posts analyzed"
+            if subreddit_info and subreddit_info.subscribers > 0:
+                success_msg += f" ({subreddit_info.subscribers:,} subscribers)"
+            
+            # Add content type summary
+            if metrics['content_type_distribution']:
+                top_types = sorted(metrics['content_type_distribution'].items(), key=lambda x: x[1], reverse=True)[:2]
+                type_summary = ", ".join([f"{count} {type_}" for type_, count in top_types])
+                success_msg += f" - Content: {type_summary}"
+            
+            logger.success(success_msg)
             return result
             
         except Exception as e:
