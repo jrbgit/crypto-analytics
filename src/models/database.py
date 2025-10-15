@@ -28,15 +28,15 @@ class CryptoProject(Base):
     age = Column(Integer)  # Days since launch
     color = Column(String(10))  # Hex color code
     
-    # Supply information (using NUMERIC for large values)
-    circulating_supply = Column(NUMERIC(30, 8))
-    total_supply = Column(NUMERIC(30, 8))
-    max_supply = Column(NUMERIC(30, 8))
+    # Supply information (using NUMERIC(40,8) for very large cryptocurrency supplies)
+    circulating_supply = Column(NUMERIC(40, 8))
+    total_supply = Column(NUMERIC(40, 8))
+    max_supply = Column(NUMERIC(40, 8))
     
-    # Market data (using NUMERIC for precision and large values)
-    current_price = Column(NUMERIC(30, 8))
-    market_cap = Column(NUMERIC(30, 8))
-    volume_24h = Column(NUMERIC(30, 8))
+    # Market data (using NUMERIC(40,8) for precision and very large values)
+    current_price = Column(NUMERIC(40, 8))
+    market_cap = Column(NUMERIC(40, 8))
+    volume_24h = Column(NUMERIC(40, 8))
     
     # Price deltas
     price_change_1h = Column(Float)
@@ -51,8 +51,8 @@ class CryptoProject(Base):
     markets_count = Column(Integer)
     pairs_count = Column(Integer)
     
-    # All time high (using NUMERIC to handle very large values)
-    ath_usd = Column(NUMERIC(30, 8))
+    # All time high (using NUMERIC(40,8) to handle very large values)
+    ath_usd = Column(NUMERIC(40, 8))
     
     # Categories (stored as JSON array)
     categories = Column(JSON)

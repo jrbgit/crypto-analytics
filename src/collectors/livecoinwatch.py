@@ -193,7 +193,7 @@ class LiveCoinWatchClient:
     def _sanitize_numeric_value(self, value, field_name: str = "field"):
         """Sanitize numeric values to prevent PostgreSQL overflow.
         
-        PostgreSQL NUMERIC(30,8) can handle values up to 10^22.
+        PostgreSQL NUMERIC(40,8) can handle values up to 10^32.
         Values exceeding this limit will be set to None with a warning.
         """
         if value is None:
@@ -204,9 +204,10 @@ class LiveCoinWatchClient:
             if isinstance(value, str):
                 value = float(value)
             
-            # Check for extreme values (beyond NUMERIC(30,8) capacity)
-            max_value = 1e22  # Maximum value for NUMERIC(30,8)
-            min_value = -1e22
+            # Check for extreme values (beyond NUMERIC(40,8) capacity)
+            # Use slightly less than 1e32 to account for precision and rounding
+            max_value = 9.9999999e31  # Safe maximum for NUMERIC(40,8)
+            min_value = -9.9999999e31
             
             if abs(value) >= max_value:
                 logger.warning(f"Value {value} for {field_name} exceeds database limits, setting to None")
