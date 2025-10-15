@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crypto_analytics_db
+    environment:
+      POSTGRES_DB: crypto_analytics
+      POSTGRES_USER: crypto_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-crypto_secure_password_2024}
+      # Performance optimizations
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db_init:/docker-entrypoint-initdb.d
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    ports:
+      - "5432:5432"
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=8MB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_worker_processes=8
+      -c max_parallel_workers_per_gather=4
+      -c max_parallel_workers=8
+      -c log_statement=all
+      -c log_duration=on
+      -c log_min_duration_statement=1000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto_user -d crypto_analytics"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: crypto_analytics_cache
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "6379:6379"
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Read replica for analytics queries (optional, uncomment when needed)
+  # postgres_replica:
+  #   image: postgres:16-alpine
+  #   container_name: crypto_analytics_replica
+  #   environment:
+  #     POSTGRES_DB: crypto_analytics
+  #     POSTGRES_USER: crypto_user
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-crypto_secure_password_2024}
+  #     PGUSER: postgres
+  #   volumes:
+  #     - postgres_replica_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5433:5432"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+  # Database administration interface (optional)
+  adminer:
+    image: adminer:4.8.1
+    container_name: crypto_analytics_admin
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: lucas
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["admin"]
+
+  # Backup service
+  postgres_backup:
+    image: postgres:16-alpine
+    container_name: crypto_analytics_backup
+    environment:
+      POSTGRES_DB: crypto_analytics
+      POSTGRES_USER: crypto_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-crypto_secure_password_2024}
+      POSTGRES_HOST: postgres
+    volumes:
+      - ./backups:/backups
+      - ./backup_scripts:/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Starting backup service...'
+        while true; do
+          echo 'Creating backup at $(date)'
+          pg_dump -h postgres -U crypto_user -d crypto_analytics > /backups/crypto_analytics_$(date +%Y%m%d_%H%M%S).sql
+          echo 'Backup completed'
+          
+          # Keep only last 7 days of backups
+          find /backups -name '*.sql' -type f -mtime +7 -delete
+          
+          # Wait 24 hours
+          sleep 86400
+        done
+      "
+    restart: unless-stopped
+    profiles: ["backup"]
+
+volumes:
+  postgres_data:
+    driver: local
+  postgres_replica_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: crypto_analytics_network
