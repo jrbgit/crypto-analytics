@@ -33,10 +33,10 @@ class CryptoProject(Base):
     total_supply = Column(NUMERIC(40, 8))
     max_supply = Column(NUMERIC(40, 8))
     
-    # Market data (using NUMERIC(40,8) for precision and very large values)
-    current_price = Column(NUMERIC(40, 8))
-    market_cap = Column(NUMERIC(40, 8))
-    volume_24h = Column(NUMERIC(40, 8))
+    # Market data (using NUMERIC(50,20) for precision with very small and very large values)
+    current_price = Column(NUMERIC(50, 20))
+    market_cap = Column(NUMERIC(40, 8))  # Keep 8 decimals for market cap (usually larger values)
+    volume_24h = Column(NUMERIC(40, 8))  # Keep 8 decimals for volume (usually larger values)
     
     # Price deltas
     price_change_1h = Column(Float)
@@ -51,8 +51,8 @@ class CryptoProject(Base):
     markets_count = Column(Integer)
     pairs_count = Column(Integer)
     
-    # All time high (using NUMERIC(40,8) to handle very large values)
-    ath_usd = Column(NUMERIC(40, 8))
+    # All time high (using NUMERIC(50,20) to handle both very small and very large values)
+    ath_usd = Column(NUMERIC(50, 20))
     
     # Categories (stored as JSON array)
     categories = Column(JSON)

@@ -214,9 +214,12 @@ class LiveCoinWatchClient:
                 return None
             
             # Check for extremely small values (precision issues)
-            if abs(value) > 0 and abs(value) < 1e-8:
-                logger.debug(f"Very small value {value} for {field_name}, may have precision issues")
+            # Only warn for non-price fields that have lower precision (NUMERIC(40,8))
+            if abs(value) > 0 and abs(value) < 1e-8 and field_name not in ['current_price', 'ath_usd']:
+                logger.debug(f"Very small value {value} for {field_name}, may have precision issues with NUMERIC(40,8)")
                 # Still keep it, but note the potential precision loss
+            elif abs(value) > 0 and abs(value) < 1e-20 and field_name in ['current_price', 'ath_usd']:
+                logger.debug(f"Extremely small value {value} for {field_name}, approaching NUMERIC(40,20) precision limits")
             
             return value
             
