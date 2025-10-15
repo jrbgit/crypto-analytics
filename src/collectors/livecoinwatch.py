@@ -46,6 +46,9 @@ class LiveCoinWatchClient:
         self.db_manager = database_manager
         self.rate_limit = RateLimit()
         
+        # Track precision warnings to avoid spam
+        self._precision_warnings_logged = set()
+        
         # Setup HTTP session with retries
         self.session = requests.Session()
         retry_strategy = Retry(
@@ -195,7 +198,7 @@ class LiveCoinWatchClient:
         
         Different fields have different precision limits:
         - current_price, ath_usd: NUMERIC(50,20) - up to ~10^30
-        - total_supply, max_supply: NUMERIC(80,8) - up to ~10^72 
+        - total_supply, max_supply, circulating_supply: NUMERIC(100,8) - up to ~10^92 
         - Other fields: NUMERIC(40,8) - up to ~10^32
         """
         if value is None:
@@ -210,13 +213,13 @@ class LiveCoinWatchClient:
             if field_name in ['current_price', 'ath_usd']:
                 # NUMERIC(50,20) - can handle values up to ~10^30
                 max_value = 9.9999999e29
-                precision_limit = 1e-20
+                precision_limit = 1e-19  # More conservative threshold (closer to actual limit)
                 precision_desc = "NUMERIC(50,20)"
-            elif field_name in ['total_supply', 'max_supply']:
-                # NUMERIC(80,8) - can handle values up to ~10^72
-                max_value = 9.9999999e71
+            elif field_name in ['total_supply', 'max_supply', 'circulating_supply']:
+                # NUMERIC(100,8) - can handle values up to ~10^92
+                max_value = 9.9999999e91
                 precision_limit = 1e-8
-                precision_desc = "NUMERIC(80,8)"
+                precision_desc = "NUMERIC(100,8)"
             else:
                 # NUMERIC(40,8) - can handle values up to ~10^32
                 max_value = 9.9999999e31
@@ -229,9 +232,14 @@ class LiveCoinWatchClient:
                 return None
             
             # Check for extremely small values (precision issues)
+            # Only log warnings periodically to avoid spam
             if abs(value) > 0 and abs(value) < precision_limit:
-                logger.debug(f"Very small value {value} for {field_name}, approaching {precision_desc} precision limits")
-                # Still keep it, but note the potential precision loss
+                warning_key = f"{field_name}_{precision_desc}"
+                if warning_key not in self._precision_warnings_logged:
+                    logger.debug(f"Very small value {value} for {field_name}, approaching {precision_desc} precision limits")
+                    logger.debug(f"(This warning will be suppressed for future {field_name} values in this session)")
+                    self._precision_warnings_logged.add(warning_key)
+                # Still keep the value, but note the potential precision loss
             
             return value
             
