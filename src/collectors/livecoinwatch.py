@@ -167,6 +167,62 @@ class LiveCoinWatchClient:
         response = self._make_request("/coins/single", payload)
         return response if response else None
     
+    def _sanitize_string_value(self, value, max_length: int, field_name: str = "field"):
+        """Sanitize string values to prevent PostgreSQL string truncation.
+        
+        Truncates strings that exceed the maximum allowed length.
+        """
+        if value is None:
+            return None
+            
+        try:
+            # Convert to string if it's not already
+            str_value = str(value)
+            
+            # Check if the string exceeds the maximum length
+            if len(str_value) > max_length:
+                logger.warning(f"String value '{str_value[:50]}...' for {field_name} exceeds {max_length} chars, truncating")
+                return str_value[:max_length]
+            
+            return str_value
+            
+        except Exception as e:
+            logger.warning(f"Error processing string value {value} for {field_name}: {e}")
+            return None
+    
+    def _sanitize_numeric_value(self, value, field_name: str = "field"):
+        """Sanitize numeric values to prevent PostgreSQL overflow.
+        
+        PostgreSQL NUMERIC(30,8) can handle values up to 10^22.
+        Values exceeding this limit will be set to None with a warning.
+        """
+        if value is None:
+            return None
+            
+        try:
+            # Convert to float if it's not already
+            if isinstance(value, str):
+                value = float(value)
+            
+            # Check for extreme values (beyond NUMERIC(30,8) capacity)
+            max_value = 1e22  # Maximum value for NUMERIC(30,8)
+            min_value = -1e22
+            
+            if abs(value) >= max_value:
+                logger.warning(f"Value {value} for {field_name} exceeds database limits, setting to None")
+                return None
+            
+            # Check for extremely small values (precision issues)
+            if abs(value) > 0 and abs(value) < 1e-8:
+                logger.debug(f"Very small value {value} for {field_name}, may have precision issues")
+                # Still keep it, but note the potential precision loss
+            
+            return value
+            
+        except (ValueError, TypeError, OverflowError) as e:
+            logger.warning(f"Error processing numeric value {value} for {field_name}: {e}")
+            return None
+    
     def process_coin_data(self, coin_data: Dict) -> CryptoProject:
         """Process API response data and update/create project in database."""
         
@@ -181,36 +237,37 @@ class LiveCoinWatchClient:
                 # Track changes for existing project
                 self._track_changes(session, project, coin_data)
             else:
-                # Create new project
-                project = CryptoProject(code=coin_data['code'])
+                # Create new project with sanitized code
+                sanitized_code = self._sanitize_string_value(coin_data['code'], 50, 'project_code')
+                project = CryptoProject(code=sanitized_code)
                 session.add(project)
-                logger.info(f"Creating new project: {coin_data['name']} ({coin_data['code']})")
+                logger.info(f"Creating new project: {coin_data['name']} ({sanitized_code})")
             
-            # Update project data
-            project.name = coin_data.get('name')
+            # Update project data (sanitize string fields)
+            project.name = self._sanitize_string_value(coin_data.get('name'), 255, 'project_name')
             project.rank = coin_data.get('rank')
             project.age = coin_data.get('age')
-            project.color = coin_data.get('color')
+            project.color = self._sanitize_string_value(coin_data.get('color'), 50, 'project_color')
             
-            # Supply data
-            project.circulating_supply = coin_data.get('circulatingSupply')
-            project.total_supply = coin_data.get('totalSupply')
-            project.max_supply = coin_data.get('maxSupply')
+            # Supply data (sanitize large values)
+            project.circulating_supply = self._sanitize_numeric_value(coin_data.get('circulatingSupply'), 'circulating_supply')
+            project.total_supply = self._sanitize_numeric_value(coin_data.get('totalSupply'), 'total_supply')
+            project.max_supply = self._sanitize_numeric_value(coin_data.get('maxSupply'), 'max_supply')
             
-            # Market data
-            project.current_price = coin_data.get('rate')
-            project.market_cap = coin_data.get('cap')
-            project.volume_24h = coin_data.get('volume')
-            project.ath_usd = coin_data.get('allTimeHighUSD')
+            # Market data (sanitize large values)
+            project.current_price = self._sanitize_numeric_value(coin_data.get('rate'), 'current_price')
+            project.market_cap = self._sanitize_numeric_value(coin_data.get('cap'), 'market_cap')
+            project.volume_24h = self._sanitize_numeric_value(coin_data.get('volume'), 'volume_24h')
+            project.ath_usd = self._sanitize_numeric_value(coin_data.get('allTimeHighUSD'), 'ath_usd')
             
-            # Price deltas
+            # Price deltas (sanitize percentage values)
             delta = coin_data.get('delta', {})
-            project.price_change_1h = delta.get('hour')
-            project.price_change_24h = delta.get('day')
-            project.price_change_7d = delta.get('week')
-            project.price_change_30d = delta.get('month')
-            project.price_change_90d = delta.get('quarter')
-            project.price_change_1y = delta.get('year')
+            project.price_change_1h = self._sanitize_numeric_value(delta.get('hour'), 'price_change_1h')
+            project.price_change_24h = self._sanitize_numeric_value(delta.get('day'), 'price_change_24h')
+            project.price_change_7d = self._sanitize_numeric_value(delta.get('week'), 'price_change_7d')
+            project.price_change_30d = self._sanitize_numeric_value(delta.get('month'), 'price_change_30d')
+            project.price_change_90d = self._sanitize_numeric_value(delta.get('quarter'), 'price_change_90d')
+            project.price_change_1y = self._sanitize_numeric_value(delta.get('year'), 'price_change_1y')
             
             # Exchange data
             project.exchanges_count = coin_data.get('exchanges')

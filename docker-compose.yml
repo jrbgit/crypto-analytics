@@ -91,6 +91,26 @@ services:
     restart: unless-stopped
     profiles: ["admin"]
 
+  # PGAdmin - PostgreSQL administration interface
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: crypto_analytics_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin_secure_password_2024}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin_servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["admin"]
+
   # Backup service
   postgres_backup:
     image: postgres:16-alpine
@@ -130,6 +150,8 @@ volumes:
   postgres_replica_data:
     driver: local
   redis_data:
+    driver: local
+  pgadmin_data:
     driver: local
 
 networks:
