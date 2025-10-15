@@ -110,6 +110,10 @@ class WhitepaperScraper:
                     error_message=f"URL filtered: {skip_reason}"
                 )
             
+            # Handle Google Drive URLs specially
+            if self._is_google_drive_url(url):
+                return self._handle_google_drive_url(url)
+            
             # First, check what type of content we're dealing with
             response = self.session.head(url, timeout=self.timeout, allow_redirects=True)
             content_type = response.headers.get('content-type', '').lower()
@@ -416,6 +420,248 @@ class WhitepaperScraper:
             # This is likely the title
             return line
         return None
+    
+    def _is_google_drive_url(self, url: str) -> bool:
+        """Check if URL is a Google Drive file link."""
+        return 'drive.google.com' in url and '/file/d/' in url
+    
+    def _extract_google_drive_file_id(self, url: str) -> Optional[str]:
+        """Extract file ID from Google Drive URL."""
+        import re
+        # Match pattern: /file/d/{FILE_ID}/view or /file/d/{FILE_ID}
+        match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+        return match.group(1) if match else None
+    
+    def _get_google_drive_direct_url(self, file_id: str) -> str:
+        """Convert Google Drive file ID to direct download URL."""
+        return f"https://drive.google.com/uc?id={file_id}&export=download"
+    
+    def _handle_google_drive_url(self, url: str) -> WhitepaperContent:
+        """Handle Google Drive file URLs specially."""
+        try:
+            logger.info(f"Processing Google Drive URL: {url}")
+            
+            # Extract file ID
+            file_id = self._extract_google_drive_file_id(url)
+            if not file_id:
+                return WhitepaperContent(
+                    url=url,
+                    content_type='unknown',
+                    title=None,
+                    content='',
+                    word_count=0,
+                    page_count=None,
+                    content_hash='',
+                    extraction_method='none',
+                    success=False,
+                    error_message="Could not extract Google Drive file ID from URL"
+                )
+            
+            # Try direct download URL first
+            download_url = self._get_google_drive_direct_url(file_id)
+            logger.debug(f"Attempting Google Drive direct download: {download_url}")
+            
+            try:
+                # Test if it's a PDF by trying to download a small portion
+                response = self.session.get(download_url, timeout=self.timeout, stream=True)
+                
+                # Check if we got redirected to a virus scan warning
+                if 'drive.google.com' in response.url and 'virus' in response.url:
+                    logger.info("Google Drive virus scan detected, trying alternative method")
+                    # For large files, Google Drive shows a virus scan warning
+                    # We can try to bypass this with a different approach
+                    return self._handle_google_drive_large_file(file_id, url)
+                
+                # Check content type from response
+                content_type = response.headers.get('content-type', '').lower()
+                if 'pdf' not in content_type:
+                    # Try to infer from content
+                    chunk = next(response.iter_content(1024), b'')
+                    if chunk.startswith(b'%PDF'):
+                        content_type = 'application/pdf'
+                
+                if 'pdf' in content_type or response.content.startswith(b'%PDF'):
+                    # It's a PDF, download and process it
+                    return self._extract_google_drive_pdf(download_url, url)
+                else:
+                    # Not a PDF, might be HTML content
+                    return self._extract_google_drive_webpage(download_url, url)
+                    
+            except Exception as e:
+                logger.debug(f"Direct download failed: {e}, trying alternative method")
+                return self._handle_google_drive_large_file(file_id, url)
+                
+        except Exception as e:
+            logger.error(f"Failed to process Google Drive URL {url}: {e}")
+            return WhitepaperContent(
+                url=url,
+                content_type='unknown',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='none',
+                success=False,
+                error_message=f"Google Drive processing failed: {e}"
+            )
+    
+    def _extract_google_drive_pdf(self, download_url: str, original_url: str) -> WhitepaperContent:
+        """Extract PDF content from Google Drive direct download URL."""
+        try:
+            # Download PDF to temporary file
+            response = self.session.get(download_url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+                tmp_file.write(response.content)
+                tmp_path = tmp_file.name
+            
+            try:
+                # Try multiple extraction methods
+                content, method, page_count = self._extract_with_multiple_methods(tmp_path)
+                
+                if not content.strip():
+                    return WhitepaperContent(
+                        url=original_url,
+                        content_type='pdf',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=page_count,
+                        content_hash='',
+                        extraction_method=f'google_drive_{method}',
+                        success=False,
+                        error_message="No text content extracted from Google Drive PDF"
+                    )
+                
+                # Clean and process content
+                content = self._clean_pdf_content(content)
+                title = self._extract_pdf_title(content)
+                word_count = len(content.split())
+                content_hash = hashlib.sha256(content.encode()).hexdigest()
+                
+                logger.success(f"Extracted Google Drive PDF content: {word_count} words, {page_count} pages")
+                
+                return WhitepaperContent(
+                    url=original_url,
+                    content_type='pdf',
+                    title=title,
+                    content=content,
+                    word_count=word_count,
+                    page_count=page_count,
+                    content_hash=content_hash,
+                    extraction_method=f'google_drive_{method}',
+                    success=True
+                )
+                
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Failed to extract Google Drive PDF from {download_url}: {e}")
+            return WhitepaperContent(
+                url=original_url,
+                content_type='pdf',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='google_drive_failed',
+                success=False,
+                error_message=f"Google Drive PDF extraction failed: {e}"
+            )
+    
+    def _extract_google_drive_webpage(self, download_url: str, original_url: str) -> WhitepaperContent:
+        """Extract webpage content from Google Drive URL."""
+        try:
+            response = self.session.get(download_url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remove unwanted elements
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'menu']):
+                element.decompose()
+            
+            # Extract title
+            title = None
+            title_elem = soup.find('title')
+            if title_elem:
+                title = title_elem.get_text().strip()
+            
+            # Extract text content
+            content = soup.get_text(separator='\n', strip=True)
+            content = self._clean_webpage_content(content)
+            
+            word_count = len(content.split())
+            content_hash = hashlib.sha256(content.encode()).hexdigest()
+            
+            logger.success(f"Extracted Google Drive webpage content: {word_count} words")
+            
+            return WhitepaperContent(
+                url=original_url,
+                content_type='webpage',
+                title=title,
+                content=content,
+                word_count=word_count,
+                page_count=None,
+                content_hash=content_hash,
+                extraction_method='google_drive_webpage',
+                success=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to extract Google Drive webpage from {download_url}: {e}")
+            return WhitepaperContent(
+                url=original_url,
+                content_type='webpage',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='google_drive_webpage_failed',
+                success=False,
+                error_message=f"Google Drive webpage extraction failed: {e}"
+            )
+    
+    def _handle_google_drive_large_file(self, file_id: str, original_url: str) -> WhitepaperContent:
+        """Handle large Google Drive files that show virus scan warnings."""
+        try:
+            # For large files, we need to confirm the download
+            confirm_url = f"https://drive.google.com/uc?id={file_id}&export=download&confirm=t"
+            logger.debug(f"Trying large file download: {confirm_url}")
+            
+            response = self.session.get(confirm_url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            # Check if it's a PDF
+            content_type = response.headers.get('content-type', '').lower()
+            if 'pdf' in content_type or response.content.startswith(b'%PDF'):
+                return self._extract_google_drive_pdf(confirm_url, original_url)
+            else:
+                return self._extract_google_drive_webpage(confirm_url, original_url)
+                
+        except Exception as e:
+            logger.error(f"Failed to handle large Google Drive file {file_id}: {e}")
+            return WhitepaperContent(
+                url=original_url,
+                content_type='unknown',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='google_drive_large_file_failed',
+                success=False,
+                error_message=f"Large Google Drive file handling failed: {e}"
+            )
 
 
 def main():

@@ -98,8 +98,7 @@ class URLFilter:
         r'instagram\.com',
         r'linkedin\.com',
         
-        # File hosting without direct content
-        r'drive\.google\.com',
+        # File hosting without direct content (Note: Google Drive handled specially for PDFs)
         r'dropbox\.com',
         r'onedrive\.com'
     ]
@@ -142,6 +141,10 @@ class URLFilter:
         # IMPORTANT: Never filter PDF files - they are valuable whitepaper content
         # regardless of what directory they're in
         if parsed.path.lower().endswith('.pdf'):
+            return False, None
+        
+        # IMPORTANT: Allow Google Drive file links - common for whitepapers
+        if 'drive.google.com' in parsed.netloc and '/file/d/' in parsed.path:
             return False, None
         
         # Check file extension
