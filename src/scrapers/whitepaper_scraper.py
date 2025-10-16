@@ -12,7 +12,7 @@ import os
 import requests
 import hashlib
 import tempfile
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -27,16 +27,20 @@ import fitz  # PyMuPDF
 try:
     import pdfplumber
     HAS_PDFPLUMBER = True
+    logger.debug("pdfplumber library loaded successfully")
 except ImportError:
     HAS_PDFPLUMBER = False
-    logger.warning("pdfplumber not available, using PyMuPDF only")
+    logger.info("pdfplumber not available - falling back to PyMuPDF for PDF extraction")
+    logger.debug("To install pdfplumber: pip install pdfplumber")
 
 try:
     import PyPDF2
     HAS_PYPDF2 = True
+    logger.debug("PyPDF2 library loaded successfully")
 except ImportError:
     HAS_PYPDF2 = False
-    logger.warning("PyPDF2 not available, using PyMuPDF only")
+    logger.info("PyPDF2 not available - falling back to PyMuPDF and pdfplumber for PDF extraction")
+    logger.debug("To install PyPDF2: pip install PyPDF2")
 
 from bs4 import BeautifulSoup
 
@@ -81,9 +85,26 @@ class WhitepaperScraper:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': self.user_agent})
         
+        # Log PDF extraction capabilities
+        self._log_pdf_extraction_capabilities()
+        
+    def _log_pdf_extraction_capabilities(self):
+        """Log available PDF extraction capabilities."""
+        available_methods = []
+        if HAS_PDFPLUMBER:
+            available_methods.append("pdfplumber")
+        if HAS_PYPDF2:
+            available_methods.append("PyPDF2")
+        available_methods.append("PyMuPDF")  # Always available
+        
+        logger.info(f"PDF extraction methods available: {', '.join(available_methods)}")
+        
+        if not HAS_PDFPLUMBER and not HAS_PYPDF2:
+            logger.warning("Only PyMuPDF available for PDF extraction - consider installing pdfplumber and PyPDF2 for better extraction reliability")
+    
     def scrape_whitepaper(self, url: str) -> WhitepaperContent:
         """
-        Extract content from a whitepaper URL (PDF or webpage).
+        Extract content from a whitepaper URL (PDF or webpage) with 404 fallback strategies.
         
         Args:
             url: URL to the whitepaper
@@ -91,8 +112,130 @@ class WhitepaperScraper:
         Returns:
             WhitepaperContent object with extracted information
         """
+        logger.info(f"Starting whitepaper extraction for {url}")
+        
+        # Try the original URL first
+        result = self._attempt_whitepaper_extraction(url)
+        
+        # If we got a 404, try alternative URLs
+        if not result.success and "404" in result.error_message:
+            alternative_urls = self._generate_alternative_urls(url)
+            
+            for alt_url in alternative_urls:
+                logger.info(f"Trying alternative URL for 404 fallback: {alt_url}")
+                alt_result = self._attempt_whitepaper_extraction(alt_url)
+                
+                if alt_result.success:
+                    logger.success(f"Successfully retrieved whitepaper from alternative URL: {alt_url}")
+                    # Update the URL in the result to reflect the successful alternative
+                    alt_result.url = url  # Keep original URL for tracking purposes
+                    alt_result.extraction_method = f"{alt_result.extraction_method}_from_alternative_url"
+                    return alt_result
+                elif "404" not in alt_result.error_message:
+                    # If we get a different error (not 404), it might be worth trying
+                    logger.debug(f"Alternative URL {alt_url} failed with non-404 error: {alt_result.error_message}")
+                    
+            logger.warning(f"All alternative URLs failed for {url}")
+            
+        return result
+    
+    def _generate_alternative_urls(self, original_url: str) -> List[str]:
+        """
+        Generate alternative URLs to try when original returns 404.
+        
+        Args:
+            original_url: The original URL that returned 404
+            
+        Returns:
+            List of alternative URLs to try
+        """
+        alternatives = []
+        parsed = urlparse(original_url)
+        base_domain = f"{parsed.scheme}://{parsed.netloc}"
+        path = parsed.path.rstrip('/')
+        
+        # Strategy 1: Try common variations of the filename
+        if path.endswith('.pdf'):
+            # Remove .pdf and try different variations
+            base_name = path[:-4]  # Remove .pdf
+            alternatives.extend([
+                f"{base_domain}{base_name}-whitepaper.pdf",
+                f"{base_domain}{base_name}_whitepaper.pdf",
+                f"{base_domain}/whitepaper{base_name}.pdf",
+                f"{base_domain}/docs{base_name}.pdf",
+                f"{base_domain}/assets{base_name}.pdf",
+            ])
+            
+            # Try in common directories
+            filename = path.split('/')[-1]
+            alternatives.extend([
+                f"{base_domain}/whitepaper/{filename}",
+                f"{base_domain}/docs/{filename}",
+                f"{base_domain}/assets/{filename}",
+                f"{base_domain}/papers/{filename}",
+                f"{base_domain}/static/{filename}",
+                f"{base_domain}/files/{filename}",
+            ])
+        
+        # Strategy 2: Try common whitepaper names
+        common_names = [
+            '/whitepaper.pdf',
+            '/whitepaper-en.pdf', 
+            '/whitepaper_en.pdf',
+            '/white-paper.pdf',
+            '/white_paper.pdf',
+            '/paper.pdf',
+            '/litepaper.pdf',
+            '/technical-paper.pdf',
+            '/technical_paper.pdf'
+        ]
+        
+        for name in common_names:
+            alternatives.append(f"{base_domain}{name}")
+            # Also try in common directories
+            alternatives.extend([
+                f"{base_domain}/docs{name}",
+                f"{base_domain}/assets{name}",
+                f"{base_domain}/static{name}",
+            ])
+        
+        # Strategy 3: Try web.archive.org (Wayback Machine)
+        # This is a last resort as it may be slow
+        alternatives.append(f"https://web.archive.org/web/*/{original_url}")
+        
+        # Strategy 4: For webpage URLs, try different page variations
+        if not path.endswith('.pdf'):
+            alternatives.extend([
+                f"{base_domain}/whitepaper",
+                f"{base_domain}/white-paper", 
+                f"{base_domain}/litepaper",
+                f"{base_domain}/docs/whitepaper",
+                f"{base_domain}/documentation",
+                f"{base_domain}/paper",
+            ])
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_alternatives = []
+        for alt in alternatives:
+            if alt != original_url and alt not in seen:
+                seen.add(alt)
+                unique_alternatives.append(alt)
+        
+        logger.debug(f"Generated {len(unique_alternatives)} alternative URLs for {original_url}")
+        return unique_alternatives[:10]  # Limit to top 10 alternatives
+    
+    def _attempt_whitepaper_extraction(self, url: str) -> WhitepaperContent:
+        """
+        Attempt to extract whitepaper content from a single URL.
+        
+        Args:
+            url: URL to extract from
+            
+        Returns:
+            WhitepaperContent object with extracted information
+        """
         try:
-            logger.info(f"Starting whitepaper extraction for {url}")
             
             # Check URL filter first
             should_skip, skip_reason = url_filter.should_skip_url(url)
@@ -229,6 +372,64 @@ class WhitepaperScraper:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
             
+            # Check if we actually got a PDF or if it's HTML (404 page)
+            content_type = response.headers.get('content-type', '').lower()
+            if not response.content.startswith(b'%PDF') and 'text/html' in content_type:
+                # We got an HTML page instead of a PDF (probably a 404 page)
+                logger.warning(f"PDF URL {url} returned HTML content (likely 404 page), attempting webpage extraction")
+                
+                # Try to extract meaningful content from the HTML
+                soup = BeautifulSoup(response.content, 'html.parser')
+                text_content = soup.get_text(separator='\n', strip=True)
+                
+                # Check for common 404 indicators
+                text_lower = text_content.lower()
+                if any(indicator in text_lower for indicator in [
+                    "page doesn't exist", "page not found", "404", "oops", 
+                    "back to home", "file not found", "document not found"
+                ]):
+                    return WhitepaperContent(
+                        url=url,
+                        content_type='pdf',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=None,
+                        content_hash='',
+                        extraction_method='none',
+                        success=False,
+                        error_message="PDF not found: URL returns 404 HTML page instead of PDF document"
+                    )
+                
+                # If not a clear 404, treat as webpage content
+                return WhitepaperContent(
+                    url=url,
+                    content_type='webpage',
+                    title=soup.find('title').get_text().strip() if soup.find('title') else None,
+                    content=self._clean_webpage_content(text_content),
+                    word_count=len(text_content.split()),
+                    page_count=None,
+                    content_hash=hashlib.sha256(text_content.encode()).hexdigest(),
+                    extraction_method='html_fallback_from_pdf_url',
+                    success=True if len(text_content.split()) >= 20 else False,
+                    error_message=None if len(text_content.split()) >= 20 else "Insufficient content from HTML fallback"
+                )
+            
+            # Verify we got actual PDF content
+            if not response.content.startswith(b'%PDF'):
+                return WhitepaperContent(
+                    url=url,
+                    content_type='pdf',
+                    title=None,
+                    content='',
+                    word_count=0,
+                    page_count=None,
+                    content_hash='',
+                    extraction_method='none',
+                    success=False,
+                    error_message="Invalid PDF: Downloaded content is not a PDF file"
+                )
+            
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
                 tmp_file.write(response.content)
                 tmp_path = tmp_file.name
@@ -323,53 +524,158 @@ class WhitepaperScraper:
             )
     
     def _extract_with_multiple_methods(self, pdf_path: str) -> tuple[str, str, int]:
-        """Try multiple PDF extraction methods and return the best result."""
+        """Try multiple PDF extraction methods and return the best result with detailed error handling."""
         methods = []
+        extraction_errors = []
         
-        # Method 1: PyMuPDF (fitz)
+        # Method 1: PyMuPDF (fitz) - Usually most reliable
         try:
             doc = fitz.open(pdf_path)
-            text = ""
-            for page in doc:
-                text += page.get_text()
-            doc.close()
-            methods.append(('pymupdf', text.strip(), doc.page_count))
-            logger.debug(f"PyMuPDF extracted {len(text.split())} words")
+            if doc.is_pdf:
+                text = ""
+                page_count = doc.page_count
+                
+                # Check if PDF is password protected
+                if doc.needs_pass:
+                    doc.close()
+                    extraction_errors.append(('pymupdf', 'password_protected', 'PDF is password protected'))
+                    logger.warning(f"PDF is password protected, PyMuPDF cannot extract content")
+                else:
+                    for page_num in range(page_count):
+                        try:
+                            page = doc[page_num]
+                            page_text = page.get_text()
+                            if page_text:
+                                text += page_text + "\n"
+                        except Exception as page_e:
+                            logger.debug(f"PyMuPDF failed to extract page {page_num}: {page_e}")
+                            continue
+                    
+                    doc.close()
+                    
+                    if text.strip():
+                        methods.append(('pymupdf', text.strip(), page_count))
+                        logger.debug(f"PyMuPDF extracted {len(text.split())} words from {page_count} pages")
+                    else:
+                        extraction_errors.append(('pymupdf', 'no_text_content', 'PDF contains no extractable text (possibly scanned images)'))
+                        logger.debug("PyMuPDF opened PDF but extracted no text content")
+            else:
+                doc.close()
+                extraction_errors.append(('pymupdf', 'invalid_pdf', 'File is not a valid PDF document'))
+                logger.debug("PyMuPDF: File is not a valid PDF")
+                
         except Exception as e:
-            logger.debug(f"PyMuPDF failed: {e}")
+            error_msg = str(e)
+            if "document closed" in error_msg.lower():
+                extraction_errors.append(('pymupdf', 'document_closed', 'PDF document was unexpectedly closed'))
+            elif "invalid pdf" in error_msg.lower() or "not a pdf" in error_msg.lower():
+                extraction_errors.append(('pymupdf', 'corrupted_pdf', 'PDF file appears to be corrupted or invalid'))
+            elif "password" in error_msg.lower():
+                extraction_errors.append(('pymupdf', 'password_protected', 'PDF requires password for access'))
+            else:
+                extraction_errors.append(('pymupdf', 'unknown_error', f'Unexpected error: {error_msg[:100]}'))
+            logger.debug(f"PyMuPDF failed: {error_msg}")
         
-        # Method 2: pdfplumber (if available)
+        # Method 2: pdfplumber (if available) - Good for structured text
         if HAS_PDFPLUMBER:
             try:
                 with pdfplumber.open(pdf_path) as pdf:
-                    text = ""
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n"
-                    methods.append(('pdfplumber', text.strip(), len(pdf.pages)))
-                    logger.debug(f"pdfplumber extracted {len(text.split())} words")
+                    if len(pdf.pages) == 0:
+                        extraction_errors.append(('pdfplumber', 'no_pages', 'PDF contains no pages'))
+                    else:
+                        text = ""
+                        successful_pages = 0
+                        
+                        for page_num, page in enumerate(pdf.pages):
+                            try:
+                                page_text = page.extract_text()
+                                if page_text and page_text.strip():
+                                    text += page_text + "\n"
+                                    successful_pages += 1
+                            except Exception as page_e:
+                                logger.debug(f"pdfplumber failed to extract page {page_num}: {page_e}")
+                                continue
+                        
+                        if text.strip():
+                            methods.append(('pdfplumber', text.strip(), len(pdf.pages)))
+                            logger.debug(f"pdfplumber extracted {len(text.split())} words from {successful_pages}/{len(pdf.pages)} pages")
+                        else:
+                            extraction_errors.append(('pdfplumber', 'no_text_content', 'PDF contains no extractable text'))
+                            
             except Exception as e:
-                logger.debug(f"pdfplumber failed: {e}")
+                error_msg = str(e)
+                if "No /Root object" in error_msg:
+                    extraction_errors.append(('pdfplumber', 'corrupted_pdf', 'PDF structure is corrupted (no root object)'))
+                elif "encrypted" in error_msg.lower() or "password" in error_msg.lower():
+                    extraction_errors.append(('pdfplumber', 'encrypted_pdf', 'PDF is encrypted and requires password'))
+                else:
+                    extraction_errors.append(('pdfplumber', 'unknown_error', f'Unexpected error: {error_msg[:100]}'))
+                logger.debug(f"pdfplumber failed: {error_msg}")
         
-        # Method 3: PyPDF2 (if available)
+        # Method 3: PyPDF2 (if available) - Fallback option
         if HAS_PYPDF2:
             try:
                 with open(pdf_path, 'rb') as file:
                     reader = PyPDF2.PdfReader(file)
-                    text = ""
-                    for page in reader.pages:
-                        text += page.extract_text() + "\n"
-                    methods.append(('pypdf2', text.strip(), len(reader.pages)))
-                    logger.debug(f"PyPDF2 extracted {len(text.split())} words")
+                    
+                    if reader.is_encrypted:
+                        extraction_errors.append(('pypdf2', 'encrypted_pdf', 'PDF is encrypted'))
+                        logger.debug("PyPDF2: PDF is encrypted")
+                    elif len(reader.pages) == 0:
+                        extraction_errors.append(('pypdf2', 'no_pages', 'PDF contains no pages'))
+                    else:
+                        text = ""
+                        successful_pages = 0
+                        
+                        for page_num, page in enumerate(reader.pages):
+                            try:
+                                page_text = page.extract_text()
+                                if page_text and page_text.strip():
+                                    text += page_text + "\n"
+                                    successful_pages += 1
+                            except Exception as page_e:
+                                logger.debug(f"PyPDF2 failed to extract page {page_num}: {page_e}")
+                                continue
+                        
+                        if text.strip():
+                            methods.append(('pypdf2', text.strip(), len(reader.pages)))
+                            logger.debug(f"PyPDF2 extracted {len(text.split())} words from {successful_pages}/{len(reader.pages)} pages")
+                        else:
+                            extraction_errors.append(('pypdf2', 'no_text_content', 'PDF contains no extractable text'))
+                            
             except Exception as e:
-                logger.debug(f"PyPDF2 failed: {e}")
+                error_msg = str(e)
+                if "EOF marker not found" in error_msg or "Invalid PDF" in error_msg:
+                    extraction_errors.append(('pypdf2', 'corrupted_pdf', 'PDF file is corrupted or incomplete'))
+                elif "PdfReadError" in error_msg:
+                    extraction_errors.append(('pypdf2', 'read_error', 'PDF cannot be read due to format issues'))
+                else:
+                    extraction_errors.append(('pypdf2', 'unknown_error', f'Unexpected error: {error_msg[:100]}'))
+                logger.debug(f"PyPDF2 failed: {error_msg}")
+        
+        # Log summary of extraction attempts
+        if extraction_errors:
+            error_summary = "; ".join([f"{method}: {error_type}" for method, error_type, _ in extraction_errors])
+            logger.debug(f"PDF extraction errors: {error_summary}")
         
         if not methods:
-            raise Exception("All PDF extraction methods failed")
+            # Provide detailed error message based on the types of failures encountered
+            error_types = [error_type for _, error_type, _ in extraction_errors]
+            
+            if 'password_protected' in error_types or 'encrypted_pdf' in error_types:
+                raise Exception("PDF extraction failed: Document is password protected or encrypted")
+            elif 'corrupted_pdf' in error_types or 'invalid_pdf' in error_types:
+                raise Exception("PDF extraction failed: Document is corrupted or invalid")
+            elif 'no_text_content' in error_types:
+                raise Exception("PDF extraction failed: Document contains no extractable text (possibly scanned images only)")
+            elif 'no_pages' in error_types:
+                raise Exception("PDF extraction failed: Document contains no pages")
+            else:
+                raise Exception("All PDF extraction methods failed")
         
         # Return the method with the most extracted content
         best_method = max(methods, key=lambda x: len(x[1].split()))
+        logger.info(f"Best extraction method: {best_method[0]} with {len(best_method[1].split())} words")
         return best_method[1], best_method[0], best_method[2]
     
     def _extract_webpage_content(self, url: str) -> WhitepaperContent:

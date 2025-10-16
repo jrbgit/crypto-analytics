@@ -106,40 +106,97 @@ class WebsiteScraper:
             'roadmap': ['roadmap', 'timeline', 'milestones', 'development']
         }
     
-    def can_fetch(self, url: str) -> Tuple[bool, Optional[str]]:
-        """Check if we can fetch the URL according to robots.txt.
+    def can_fetch(self, url: str, max_retries: int = 2) -> Tuple[bool, Optional[str]]:
+        """Check if we can fetch the URL according to robots.txt with retry logic.
+        
+        Args:
+            url: URL to check
+            max_retries: Maximum number of retry attempts for transient failures
         
         Returns:
             Tuple of (can_fetch: bool, error_info: Optional[str])
         """
-        try:
-            parsed_url = urlparse(url)
-            robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
-            
-            rp = urllib.robotparser.RobotFileParser()
-            rp.set_url(robots_url)
-            rp.read()
-            
-            return rp.can_fetch(self.session.headers['User-Agent'], url), None
-        except Exception as e:
-            error_msg = str(e)
-            
-            # Categorize robots.txt fetch errors for quieter logging
-            if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
-                logger.debug(f"Cannot check robots.txt for {url}: DNS resolution failed")
-                return True, 'dns_resolution_error'  # Allow if we can't resolve DNS
-            elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
-                logger.debug(f"Cannot check robots.txt for {url}: SSL certificate error")
-                return True, 'ssl_certificate_error'  # Allow if SSL issues
-            elif "timeout" in error_msg.lower():
-                logger.debug(f"Cannot check robots.txt for {url}: Connection timeout")
-                return True, 'connection_timeout'  # Allow if timeout
-            elif "forcibly closed" in error_msg.lower() or "10054" in error_msg or "ConnectionResetError" in error_msg:
-                logger.debug(f"Cannot check robots.txt for {url}: Connection reset by remote host")
-                return True, 'connection_reset'  # Allow if connection reset
-            else:
-                logger.debug(f"Cannot check robots.txt for {url}: {error_msg[:100]}...")
-                return True, 'unknown_robots_error'  # Default to allowing if we can't check
+        parsed_url = urlparse(url)
+        robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
+        
+        for attempt in range(max_retries + 1):
+            try:
+                rp = urllib.robotparser.RobotFileParser()
+                rp.set_url(robots_url)
+                rp.read()
+                
+                can_fetch_result = rp.can_fetch(self.session.headers['User-Agent'], url)
+                if attempt > 0:  # Log successful retry
+                    logger.debug(f"Robots.txt check succeeded on attempt {attempt + 1} for {url}")
+                
+                return can_fetch_result, None
+                
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Categorize robots.txt fetch errors
+                if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
+                    if attempt == 0:  # Only log on first attempt for DNS errors (likely permanent)
+                        logger.debug(f"Cannot check robots.txt for {url}: DNS resolution failed (permanent)")
+                    return True, 'dns_resolution_error'  # Allow if we can't resolve DNS
+                    
+                elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
+                    if "CERTIFICATE_VERIFY_FAILED" in error_msg or "certificate verify failed" in error_msg.lower():
+                        logger.debug(f"Cannot check robots.txt for {url}: SSL certificate verification failed")
+                        return True, 'ssl_certificate_verification_failed'
+                    elif "WRONG_VERSION_NUMBER" in error_msg or "wrong version number" in error_msg.lower():
+                        logger.debug(f"Cannot check robots.txt for {url}: SSL version mismatch")
+                        return True, 'ssl_version_mismatch'
+                    else:
+                        logger.debug(f"Cannot check robots.txt for {url}: SSL certificate error")
+                        return True, 'ssl_certificate_error'
+                        
+                elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                    if attempt < max_retries:
+                        logger.debug(f"Robots.txt timeout for {url}, retrying ({attempt + 1}/{max_retries})")
+                        time.sleep(1 * (attempt + 1))  # Progressive backoff
+                        continue
+                    else:
+                        logger.debug(f"Cannot check robots.txt for {url}: Connection timeout after {max_retries + 1} attempts")
+                        return True, 'connection_timeout_persistent'
+                        
+                elif "forcibly closed" in error_msg.lower() or "10054" in error_msg or "ConnectionResetError" in error_msg:
+                    if attempt < max_retries:
+                        logger.debug(f"Robots.txt connection reset for {url}, retrying ({attempt + 1}/{max_retries})")
+                        time.sleep(1 * (attempt + 1))  # Progressive backoff
+                        continue
+                    else:
+                        logger.debug(f"Cannot check robots.txt for {url}: Connection reset after {max_retries + 1} attempts")
+                        return True, 'connection_reset_persistent'
+                        
+                elif "404" in error_msg or "Not Found" in error_msg:
+                    logger.debug(f"Robots.txt not found for {url} (404) - assuming allowed")
+                    return True, 'robots_txt_not_found'
+                    
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    logger.debug(f"Robots.txt access forbidden for {url} (403) - assuming allowed")
+                    return True, 'robots_txt_forbidden'
+                    
+                elif "Max retries exceeded" in error_msg:
+                    if attempt < max_retries:
+                        logger.debug(f"Max retries exceeded for robots.txt {url}, retrying ({attempt + 1}/{max_retries})")
+                        time.sleep(2 * (attempt + 1))  # Longer backoff for connection issues
+                        continue
+                    else:
+                        logger.debug(f"Cannot check robots.txt for {url}: Max retries exceeded persistently")
+                        return True, 'max_retries_exceeded_persistent'
+                        
+                else:
+                    if attempt < max_retries:
+                        logger.debug(f"Unknown robots.txt error for {url}, retrying ({attempt + 1}/{max_retries}): {error_msg[:50]}...")
+                        time.sleep(1 * (attempt + 1))
+                        continue
+                    else:
+                        logger.debug(f"Cannot check robots.txt for {url}: {error_msg[:100]}... (after {max_retries + 1} attempts)")
+                        return True, 'unknown_robots_error_persistent'
+        
+        # This should never be reached, but just in case
+        return True, 'robots_check_failed_unexpectedly'
     
     def classify_page_type(self, url: str, title: str, content: str) -> str:
         """Classify the type of page based on URL, title, and content."""
@@ -222,9 +279,13 @@ class WebsiteScraper:
         
         return content, title, list(set(links))  # Remove duplicates
     
-    def fetch_page(self, url: str) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
-        """Fetch and process a single page.
+    def fetch_page(self, url: str, max_retries: int = 2) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
+        """Fetch and process a single page with retry logic for transient failures.
         
+        Args:
+            url: URL to fetch
+            max_retries: Maximum number of retry attempts for transient failures
+            
         Returns:
             Tuple of (ScrapedPage or None, status_info dict)
         """
@@ -244,51 +305,101 @@ class WebsiteScraper:
                 status_info['robots_error_type'] = robots_error
             return None, status_info
         
-        try:
+        return self._fetch_page_with_retry(url, status_info, max_retries)
+    
+    def _fetch_page_with_retry(self, url: str, status_info: Dict[str, Any], max_retries: int) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
+        """Internal method to handle page fetching with retry logic."""
+        
+        for attempt in range(max_retries + 1):
+            try:
+                return self._fetch_page_attempt(url, status_info, attempt, max_retries)
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if this is a retryable error
+                is_retryable = self._is_retryable_error(error_msg)
+                
+                if attempt < max_retries and is_retryable:
+                    backoff_time = (2 ** attempt) * 0.5  # Exponential backoff: 0.5s, 1s, 2s
+                    logger.debug(f"Retryable error for {url} on attempt {attempt + 1}, retrying in {backoff_time}s: {error_msg[:50]}...")
+                    time.sleep(backoff_time)
+                    continue
+                else:
+                    # Final attempt failed or non-retryable error
+                    return self._handle_fetch_error(url, status_info, e, attempt + 1)
+        
+        # Should never reach here
+        return None, status_info
+    
+    def _is_retryable_error(self, error_msg: str) -> bool:
+        """Determine if an error is retryable."""
+        # DNS resolution failures are typically permanent for the duration of a run
+        if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
+            return False
+            
+        # SSL certificate errors are typically permanent
+        if "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
+            return False
+            
+        # These are typically transient and worth retrying
+        retryable_patterns = [
+            "timeout", "timed out", "Connection reset", "ConnectionResetError",
+            "forcibly closed", "connection was aborted", "Connection aborted",
+            "Max retries exceeded", "502", "503", "504", "Connection broken"
+        ]
+        
+        return any(pattern in error_msg for pattern in retryable_patterns)
+    
+    def _fetch_page_attempt(self, url: str, status_info: Dict[str, Any], attempt: int, max_retries: int) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
+        """Single attempt to fetch a page."""
+        
+        if attempt > 0:
+            logger.debug(f"Fetching: {url} (attempt {attempt + 1}/{max_retries + 1})")
+        else:
             logger.debug(f"Fetching: {url}")
             
-            # First, make a HEAD request to check content type and size (if supported)
-            try:
-                head_response = self.session.head(url, timeout=15, allow_redirects=True)
+        # First, make a HEAD request to check content type and size (if supported)
+        try:
+            head_response = self.session.head(url, timeout=15, allow_redirects=True)
                 
-                # Check content type to avoid downloading non-analyzable files
-                content_type = head_response.headers.get('content-type', '').lower()
-                if content_type:
-                    # Skip if content type indicates non-analyzable file
-                    non_analyzable_types = [
-                        'application/octet-stream',  # Generic binary
-                        'application/zip', 'application/x-zip',
-                        'application/x-executable', 'application/x-msdownload',
-                        'application/vnd.android.package-archive',  # APK files
-                        'application/java-archive',  # JAR files
-                        'application/x-deb', 'application/x-rpm',  # Package files
-                        'application/x-apple-diskimage',  # DMG files
-                        'audio/', 'video/', 'image/'  # Media files
-                    ]
-                    
-                    # Check if content type starts with any non-analyzable type
-                    for non_type in non_analyzable_types:
-                        if content_type.startswith(non_type):
-                            logger.debug(f"Skipping {url}: non-analyzable content type {content_type}")
-                            return None, status_info
+            # Check content type to avoid downloading non-analyzable files
+            content_type = head_response.headers.get('content-type', '').lower()
+            if content_type:
+                # Skip if content type indicates non-analyzable file
+                non_analyzable_types = [
+                    'application/octet-stream',  # Generic binary
+                    'application/zip', 'application/x-zip',
+                    'application/x-executable', 'application/x-msdownload',
+                    'application/vnd.android.package-archive',  # APK files
+                    'application/java-archive',  # JAR files
+                    'application/x-deb', 'application/x-rpm',  # Package files
+                    'application/x-apple-diskimage',  # DMG files
+                    'audio/', 'video/', 'image/'  # Media files
+                ]
                 
-                # Check file size to avoid very large downloads
-                content_length = head_response.headers.get('content-length')
-                if content_length:
-                    try:
-                        size_mb = int(content_length) / (1024 * 1024)
-                        if size_mb > 50:  # Skip files larger than 50MB
-                            logger.debug(f"Skipping {url}: file too large ({size_mb:.1f}MB)")
-                            return None, status_info
-                    except ValueError:
-                        pass  # Continue if size can't be parsed
-                        
-            except Exception:
-                # If HEAD request fails, continue with GET (some servers don't support HEAD)
-                logger.debug(f"HEAD request failed for {url}, proceeding with GET")
-                pass
+                # Check if content type starts with any non-analyzable type
+                for non_type in non_analyzable_types:
+                    if content_type.startswith(non_type):
+                        logger.debug(f"Skipping {url}: non-analyzable content type {content_type}")
+                        return None, status_info
             
-            # Now make the actual GET request
+            # Check file size to avoid very large downloads
+            content_length = head_response.headers.get('content-length')
+            if content_length:
+                try:
+                    size_mb = int(content_length) / (1024 * 1024)
+                    if size_mb > 50:  # Skip files larger than 50MB
+                        logger.debug(f"Skipping {url}: file too large ({size_mb:.1f}MB)")
+                        return None, status_info
+                except ValueError:
+                    pass  # Continue if size can't be parsed
+        except Exception as e:
+            # If HEAD request fails, continue with GET (some servers don't support HEAD)
+            logger.debug(f"HEAD request failed for {url}, proceeding with GET")
+            pass
+        
+        # Now make the actual GET request
+        try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
             
@@ -304,19 +415,48 @@ class WebsiteScraper:
             # Sanitize content for database storage
             content = sanitize_content_for_storage(content)
             
-            # Check if content indicates a parked domain
-            if url_filter.is_likely_parked_domain(content):
+            # Enhanced content quality assessment
+            quality_assessment = url_filter.assess_content_quality(content, title)
+            
+            # Handle different content quality issues
+            if quality_assessment['content_type'] == 'parked':
                 logger.warning(f"Detected parked/for-sale domain: {url}")
                 status_info['parked_detected'] = True
-                # Try to detect parking service from content
-                content_lower = content.lower()
-                if 'godaddy' in content_lower:
-                    status_info['parking_service'] = 'GoDaddy'
-                elif 'sedo' in content_lower:
-                    status_info['parking_service'] = 'Sedo'
-                elif 'namecheap' in content_lower:
-                    status_info['parking_service'] = 'Namecheap'
+                status_info['parking_service'] = quality_assessment.get('parking_service')
                 return None, status_info
+            
+            elif quality_assessment['content_type'] == 'dynamic':
+                logger.info(f"Dynamic content detected for {url} - attempting alternative extraction")
+                status_info['dynamic_content'] = True
+                
+                # For dynamic content, try to extract any meaningful text available
+                if quality_assessment['word_count'] >= 10:  # Some content is better than none
+                    logger.debug(f"Proceeding with limited dynamic content ({quality_assessment['word_count']} words)")
+                else:
+                    status_info['content_quality'] = quality_assessment
+                    logger.debug(f"Insufficient dynamic content, skipping {url}")
+                    return None, status_info
+                    
+            elif quality_assessment['content_type'] == 'restricted':
+                logger.info(f"Access restricted content detected for {url}")
+                status_info['access_restricted'] = True
+                status_info['content_quality'] = quality_assessment
+                return None, status_info
+                
+            elif quality_assessment['content_type'] == 'error':
+                logger.debug(f"Error page detected for {url}")
+                status_info['error_page'] = True
+                status_info['content_quality'] = quality_assessment
+                return None, status_info
+                
+            elif quality_assessment['quality_score'] < 3 and quality_assessment['word_count'] < 30:
+                logger.debug(f"Very low quality content for {url} (score: {quality_assessment['quality_score']}, words: {quality_assessment['word_count']})")
+                status_info['low_quality'] = True
+                status_info['content_quality'] = quality_assessment
+                return None, status_info
+            
+            # Store quality assessment for later analysis
+            status_info['content_quality'] = quality_assessment
             
             # Skip if content is too minimal
             if len(content.strip()) < 50:
@@ -374,12 +514,40 @@ class WebsiteScraper:
                 status_info['error_type'] = 'http_error_no_response'
             
             return None, status_info
-        except Exception as e:
-            error_msg = str(e)
-            
-            # Categorize the error for better status logging
+    
+    def _handle_fetch_error(self, url: str, status_info: Dict[str, Any], e: Exception, attempts_made: int) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
+        """Handle fetch errors with proper categorization."""
+        error_msg = str(e)
+        
+        # Handle HTTP errors specifically  
+        if isinstance(e, requests.exceptions.HTTPError):
+            if e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 404:
+                    logger.warning(f"Page not found (404) for {url} - website issue, not our code")
+                    status_info['error_type'] = 'http_404_not_found'
+                elif status_code == 403:
+                    logger.warning(f"Access forbidden (403) for {url}")
+                    status_info['error_type'] = 'http_403_forbidden'
+                elif status_code == 401:
+                    logger.warning(f"Authentication required (401) for {url}")
+                    status_info['error_type'] = 'http_401_unauthorized'
+                elif 400 <= status_code < 500:
+                    logger.warning(f"Client error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_client_error'
+                elif 500 <= status_code < 600:
+                    logger.warning(f"Server error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_server_error'
+                else:
+                    logger.error(f"HTTP error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_error'
+            else:
+                logger.error(f"HTTP error for {url}: {e}")
+                status_info['error_type'] = 'http_error_no_response'
+        else:
+            # Categorize other errors with retry information
             if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
-                logger.warning(f"DNS resolution failed for {url}: Domain not found")
+                logger.warning(f"DNS resolution failed for {url}: Domain not found (permanent failure)")
                 status_info['error_type'] = 'dns_resolution_error'
                 status_info['dns_resolved'] = False
             elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
@@ -387,22 +555,22 @@ class WebsiteScraper:
                 status_info['error_type'] = 'ssl_certificate_error'
                 status_info['ssl_valid'] = False
             elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                logger.warning(f"Connection timeout for {url}")
-                status_info['error_type'] = 'connection_timeout'
+                logger.warning(f"Connection timeout for {url} after {attempts_made} attempts")
+                status_info['error_type'] = 'connection_timeout_final'
             elif "Max retries exceeded" in error_msg:
-                logger.warning(f"Connection failed after retries for {url}")
-                status_info['error_type'] = 'connection_retries_exhausted'
+                logger.warning(f"Connection failed after retries for {url} (total {attempts_made} attempts)")
+                status_info['error_type'] = 'connection_retries_exhausted_final'
             elif "Connection aborted" in error_msg or "ConnectionResetError" in error_msg or "10054" in error_msg:
-                logger.warning(f"Connection reset by remote host for {url} - server/network issue")
-                status_info['error_type'] = 'connection_reset_by_peer'
+                logger.warning(f"Connection reset by remote host for {url} after {attempts_made} attempts - server/network issue")
+                status_info['error_type'] = 'connection_reset_by_peer_final'
             elif "forcibly closed" in error_msg.lower() or "connection was aborted" in error_msg.lower():
-                logger.warning(f"Connection forcibly closed for {url} - server terminated connection")
-                status_info['error_type'] = 'connection_forcibly_closed'
+                logger.warning(f"Connection forcibly closed for {url} after {attempts_made} attempts - server terminated connection")
+                status_info['error_type'] = 'connection_forcibly_closed_final'
             else:
-                logger.error(f"Failed to fetch {url}: {e}")
-                status_info['error_type'] = 'unknown_connection_error'
-            
-            return None, status_info
+                logger.error(f"Failed to fetch {url} after {attempts_made} attempts: {e}")
+                status_info['error_type'] = 'unknown_connection_error_final'
+        
+        return None, status_info
     
     def prioritize_links(self, links: List[str], visited: Set[str]) -> List[str]:
         """Prioritize links based on importance keywords."""

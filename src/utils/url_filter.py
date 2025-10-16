@@ -6,7 +6,7 @@ or are known to cause issues during scraping.
 
 import re
 from urllib.parse import urlparse, parse_qs
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
 class URLFilter:
     """Filters URLs to avoid scraping problematic or non-content URLs"""
@@ -124,7 +124,38 @@ class URLFilter:
         'under construction',
         'parked free',
         'expired domain',
-        'premium domain'
+        'premium domain',
+        'domain expired',
+        'renew your domain',
+        'click here to renew',
+        'buy now',
+        'make an offer',
+        'contact owner',
+        'inquire about this domain',
+        'domain auction',
+        'this domain may be for sale',
+        'registrar suspension',
+        'temporary landing page',
+        'placeholder page',
+        'default page',
+        'website coming soon',
+        'site under maintenance',
+        'maintenance mode'
+    ]
+    
+    # Known parking service providers
+    PARKING_SERVICE_INDICATORS = [
+        'godaddy',
+        'sedo',
+        'namecheap',
+        'domain.com',
+        'park by',
+        'courtesy of',
+        'powered by',
+        'parked by',
+        'hosted by',
+        'registrar',
+        'underdeveloped'
     ]
     
     def __init__(self):
@@ -222,7 +253,7 @@ class URLFilter:
         
         return None
     
-    def is_likely_parked_domain(self, content: str) -> bool:
+    def is_likely_parked_domain(self, content: str) -> Tuple[bool, Optional[str]]:
         """
         Check if page content indicates a parked or for-sale domain
         
@@ -230,25 +261,213 @@ class URLFilter:
             content: Page content to analyze
             
         Returns:
-            True if content indicates parked/for-sale domain
+            Tuple of (is_parked: bool, parking_service: Optional[str])
         """
         if not content:
-            return False
+            return False, None
         
         content_lower = content.lower()
         
         # Check for domain sale indicators
+        parked_score = 0
+        detected_service = None
+        
         for indicator in self.DOMAIN_SALE_INDICATORS:
             if indicator in content_lower:
-                return True
+                parked_score += 2
+                
+        # Check for parking service providers
+        for service in self.PARKING_SERVICE_INDICATORS:
+            if service in content_lower:
+                parked_score += 3
+                if not detected_service:  # Store first detected service
+                    detected_service = service.title()
         
-        # Check content length - parked domains often have minimal content
-        if len(content.strip()) < 100:
-            # Look for very short content with domain-related keywords
-            if any(phrase in content_lower for phrase in ['domain for', 'buy domain', 'domain sale', 'domain parking']):
-                return True
+        # Content length analysis with more nuance
+        content_length = len(content.strip())
+        word_count = len(content.split())
         
-        return False
+        # Very minimal content is suspicious
+        if content_length < 200 and word_count < 50:
+            parked_score += 1
+            
+            # Look for specific short content patterns
+            short_domain_phrases = [
+                'domain for', 'buy domain', 'domain sale', 'domain parking',
+                'contact us', 'make offer', 'inquire', 'coming soon'
+            ]
+            
+            if any(phrase in content_lower for phrase in short_domain_phrases):
+                parked_score += 2
+        
+        # Check for repetitive or templated content patterns
+        if self._has_templated_content_pattern(content_lower):
+            parked_score += 1
+        
+        # Check for absence of substantial content
+        if not self._has_substantial_content(content_lower):
+            parked_score += 1
+        
+        # Threshold for parking detection
+        is_parked = parked_score >= 3
+        
+        return is_parked, detected_service
+    
+    def _has_templated_content_pattern(self, content_lower: str) -> bool:
+        """Check if content follows common parking page templates."""
+        template_patterns = [
+            'privacy policy',
+            'terms and conditions', 
+            'copyright',
+            'all rights reserved',
+            'disclaimer'
+        ]
+        
+        # If content is short but has multiple template elements, likely parked
+        template_count = sum(1 for pattern in template_patterns if pattern in content_lower)
+        return len(content_lower) < 1000 and template_count >= 2
+    
+    def _has_substantial_content(self, content_lower: str) -> bool:
+        """Check if content has substantial, unique information."""
+        # Look for indicators of real content
+        substantial_indicators = [
+            'about us',
+            'our mission',
+            'technology',
+            'blockchain',
+            'cryptocurrency',
+            'token',
+            'whitepaper',
+            'roadmap',
+            'team',
+            'partnership',
+            'documentation',
+            'api',
+            'tutorial',
+            'guide'
+        ]
+        
+        return any(indicator in content_lower for indicator in substantial_indicators)
+    
+    def assess_content_quality(self, content: str, title: str = '') -> Dict[str, Any]:
+        """
+        Assess the quality and type of content for minimal content handling.
+        
+        Args:
+            content: Page content to assess
+            title: Page title (if available)
+            
+        Returns:
+            Dict with quality assessment information
+        """
+        if not content:
+            return {
+                'quality_score': 0,
+                'content_type': 'empty',
+                'issues': ['no_content'],
+                'word_count': 0,
+                'is_dynamic': False,
+                'is_blocked': False
+            }
+        
+        content_lower = content.lower()
+        word_count = len(content.split())
+        char_count = len(content.strip())
+        
+        quality_score = 5  # Start with neutral score
+        issues = []
+        content_type = 'unknown'
+        
+        # Assess content length
+        if word_count < 20:
+            quality_score -= 3
+            issues.append('very_minimal_content')
+        elif word_count < 50:
+            quality_score -= 2
+            issues.append('minimal_content')
+        elif word_count < 100:
+            quality_score -= 1
+            issues.append('limited_content')
+        
+        # Check for dynamic content indicators
+        dynamic_indicators = [
+            'javascript is required',
+            'enable javascript',
+            'please enable javascript',
+            'this site requires javascript',
+            'loading...',
+            'please wait',
+            'redirecting',
+            'if you are not redirected'
+        ]
+        
+        is_dynamic = any(indicator in content_lower for indicator in dynamic_indicators)
+        if is_dynamic:
+            quality_score -= 2
+            issues.append('dynamic_content')
+            content_type = 'dynamic'
+        
+        # Check for access restrictions
+        access_indicators = [
+            'access denied',
+            'unauthorized',
+            'forbidden',
+            'login required',
+            'please log in',
+            'subscription required',
+            'premium content',
+            'members only'
+        ]
+        
+        is_blocked = any(indicator in content_lower for indicator in access_indicators)
+        if is_blocked:
+            quality_score -= 2
+            issues.append('access_restricted')
+            content_type = 'restricted'
+        
+        # Check for error pages
+        error_indicators = [
+            '404',
+            'page not found',
+            'not found',
+            'error',
+            'something went wrong',
+            'oops'
+        ]
+        
+        is_error = any(indicator in content_lower for indicator in error_indicators)
+        if is_error:
+            quality_score -= 3
+            issues.append('error_page')
+            content_type = 'error'
+        
+        # Check for substantial content
+        if self._has_substantial_content(content_lower):
+            quality_score += 2
+            content_type = 'substantial' if content_type == 'unknown' else content_type
+        
+        # Check for parked domain
+        is_parked, parking_service = self.is_likely_parked_domain(content)
+        if is_parked:
+            quality_score -= 4
+            issues.append('parked_domain')
+            content_type = 'parked'
+        
+        # Ensure score is within bounds
+        quality_score = max(0, min(10, quality_score))
+        
+        return {
+            'quality_score': quality_score,
+            'content_type': content_type,
+            'issues': issues,
+            'word_count': word_count,
+            'char_count': char_count,
+            'is_dynamic': is_dynamic,
+            'is_blocked': is_blocked,
+            'is_error': is_error,
+            'is_parked': is_parked,
+            'parking_service': parking_service if is_parked else None
+        }
     
     def get_clean_url(self, url: str) -> str:
         """

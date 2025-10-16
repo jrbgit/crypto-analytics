@@ -13,6 +13,9 @@ import json
 
 Base = declarative_base()
 
+# Import status log classes after Base is defined to avoid circular imports
+# These are imported at the end of the file to ensure all models are available
+
 
 class CryptoProject(Base):
     """Main table for cryptocurrency projects."""
@@ -396,3 +399,9 @@ class DatabaseManager:
             **kwargs
         )
         session.add(usage)
+
+
+# Import the status log classes after all other models are defined
+# This avoids circular import issues
+from .website_status import WebsiteStatusLog
+from .whitepaper_status import WhitepaperStatusLog
