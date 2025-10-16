@@ -134,6 +134,9 @@ class WebsiteScraper:
             elif "timeout" in error_msg.lower():
                 logger.debug(f"Cannot check robots.txt for {url}: Connection timeout")
                 return True, 'connection_timeout'  # Allow if timeout
+            elif "forcibly closed" in error_msg.lower() or "10054" in error_msg or "ConnectionResetError" in error_msg:
+                logger.debug(f"Cannot check robots.txt for {url}: Connection reset by remote host")
+                return True, 'connection_reset'  # Allow if connection reset
             else:
                 logger.debug(f"Cannot check robots.txt for {url}: {error_msg[:100]}...")
                 return True, 'unknown_robots_error'  # Default to allowing if we can't check
@@ -389,6 +392,12 @@ class WebsiteScraper:
             elif "Max retries exceeded" in error_msg:
                 logger.warning(f"Connection failed after retries for {url}")
                 status_info['error_type'] = 'connection_retries_exhausted'
+            elif "Connection aborted" in error_msg or "ConnectionResetError" in error_msg or "10054" in error_msg:
+                logger.warning(f"Connection reset by remote host for {url} - server/network issue")
+                status_info['error_type'] = 'connection_reset_by_peer'
+            elif "forcibly closed" in error_msg.lower() or "connection was aborted" in error_msg.lower():
+                logger.warning(f"Connection forcibly closed for {url} - server terminated connection")
+                status_info['error_type'] = 'connection_forcibly_closed'
             else:
                 logger.error(f"Failed to fetch {url}: {e}")
                 status_info['error_type'] = 'unknown_connection_error'
