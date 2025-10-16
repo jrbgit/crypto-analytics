@@ -30,6 +30,17 @@ from urllib.parse import urlparse, urljoin
 # Import URL filter
 from utils.url_filter import url_filter
 
+# Import content sanitization utility
+sys.path.insert(0, str(Path(__file__).parent.parent / 'pipelines'))
+try:
+    from content_analysis_pipeline import sanitize_content_for_storage
+except ImportError:
+    # Fallback function if import fails
+    def sanitize_content_for_storage(content: str) -> str:
+        if not content:
+            return ''
+        return content.replace('\x00', '').strip()
+
 
 @dataclass
 class ScrapedPage:
@@ -286,6 +297,9 @@ class WebsiteScraper:
             
             # Extract content
             content, title, links = self.extract_content(response.text, url)
+            
+            # Sanitize content for database storage
+            content = sanitize_content_for_storage(content)
             
             # Check if content indicates a parked domain
             if url_filter.is_likely_parked_domain(content):

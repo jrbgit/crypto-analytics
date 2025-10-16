@@ -43,6 +43,28 @@ config_path = Path(__file__).parent.parent.parent / "config" / "env"
 load_dotenv(config_path)
 
 
+def sanitize_content_for_storage(content: str) -> str:
+    """
+    Sanitize content for database storage by removing null bytes and other problematic characters.
+    
+    Args:
+        content: Raw content string that may contain null bytes
+        
+    Returns:
+        Sanitized content safe for PostgreSQL storage
+    """
+    if not content:
+        return ''
+    
+    # Remove null bytes (0x00) which can't be stored in PostgreSQL text fields
+    sanitized = content.replace('\x00', '')
+    
+    # Remove other control characters that might cause issues (except newlines and tabs)
+    sanitized = ''.join(char for char in sanitized if ord(char) >= 32 or char in ['\n', '\t', '\r'])
+    
+    return sanitized.strip()
+
+
 class ContentAnalysisPipeline:
     """Complete pipeline for cryptocurrency content analysis (websites and whitepapers)."""
     
@@ -430,6 +452,9 @@ class ContentAnalysisPipeline:
                 for page in scrape_result.pages_scraped
             ])
             
+            # Sanitize combined content for database storage
+            combined_content = sanitize_content_for_storage(combined_content)
+            
             # Calculate content hash
             content_hash = hashlib.sha256(combined_content.encode()).hexdigest()
             
@@ -530,12 +555,15 @@ class ContentAnalysisPipeline:
                 logger.info(f"Content unchanged for {whitepaper_link.url}, skipping analysis storage")
                 return existing
             
+            # Sanitize whitepaper content for database storage
+            sanitized_content = sanitize_content_for_storage(scrape_result.content)
+            
             # Create new analysis record
             analysis_record = LinkContentAnalysis(
                 link_id=whitepaper_link.id,
                 
                 # Content metadata
-                raw_content=scrape_result.content[:50000],  # Limit size for database
+                raw_content=sanitized_content[:50000],  # Limit size for database
                 content_hash=scrape_result.content_hash,
                 page_title=scrape_result.title,
                 pages_analyzed=1,
@@ -651,6 +679,9 @@ class ContentAnalysisPipeline:
                 for article in scrape_result.articles_found
             ])
             
+            # Sanitize combined content for database storage
+            combined_content = sanitize_content_for_storage(combined_content)
+            
             # Calculate content hash based on publication and recent content
             content_hash = hashlib.sha256(f"{scrape_result.publication_url}_{scrape_result.last_post_date}".encode()).hexdigest()
             
@@ -750,6 +781,9 @@ class ContentAnalysisPipeline:
                 f"=== {post.title} (Score: {post.score}, Comments: {post.num_comments}) ===\n{post.content[:500]}..."
                 for post in scrape_result.posts_analyzed[:10]  # Top 10 posts
             ])
+            
+            # Sanitize combined content for database storage
+            combined_content = sanitize_content_for_storage(combined_content)
             
             # Calculate content hash based on subreddit and analysis time
             content_hash = hashlib.sha256(f"{scrape_result.subreddit_name}_{scrape_result.analysis_timestamp}".encode()).hexdigest()
