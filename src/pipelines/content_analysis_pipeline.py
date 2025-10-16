@@ -221,12 +221,29 @@ class ContentAnalysisPipeline:
                     reason=scrape_result.error_message
                 )
             else:
-                # Connection or other technical errors
-                self.status_logger.log_connection_error(
-                    link_id=website_link.id,
-                    url=website_link.url,
-                    error_message=scrape_result.error_message or "Unknown scraping error"
-                )
+                # Handle specific error types for better status tracking
+                # Check if scraper provided error type information
+                error_type = getattr(scrape_result, 'error_type', None)
+                
+                if error_type == 'dns_resolution_error':
+                    self.status_logger.log_dns_error(
+                        link_id=website_link.id,
+                        url=website_link.url,
+                        error_message=scrape_result.error_message
+                    )
+                elif error_type == 'ssl_certificate_error':
+                    self.status_logger.log_ssl_error(
+                        link_id=website_link.id,
+                        url=website_link.url,
+                        error_message=scrape_result.error_message
+                    )
+                else:
+                    # Connection or other technical errors
+                    self.status_logger.log_connection_error(
+                        link_id=website_link.id,
+                        url=website_link.url,
+                        error_message=scrape_result.error_message or "Unknown scraping error"
+                    )
             
             # Update scrape status without logging as error
             self._update_scrape_status(website_link, success=False, error=scrape_result.error_message)

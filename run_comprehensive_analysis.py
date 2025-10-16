@@ -67,11 +67,11 @@ def main():
         scraper_config={
             'max_pages': 8,         # Website pages
             'max_depth': 2,         # Website depth
-            'max_articles': 15,     # Medium articles
+            'max_articles': 10,     # Medium articles (reduced)
             'max_posts': 50,        # Reddit posts
             'recent_days': 90,      # Content recency
             'timeout': 60,          # Request timeout
-            'delay': 1.0            # Rate limiting
+            'delay': 5.0            # Increased rate limiting for Medium
         },
         analyzer_config={
             'provider': 'ollama', 
@@ -88,7 +88,7 @@ def main():
     batch_configs = [
         ('website', 30),      # Websites - good balance of speed and coverage
         ('whitepaper', 15),   # Whitepapers - slower due to PDF processing
-        ('medium', 20),       # Medium - medium complexity
+        ('medium', 8),        # Medium - reduced to avoid 429 rate limits
         ('reddit', 25),       # Reddit - community analysis
     ]
     
@@ -107,10 +107,11 @@ def main():
             total_stats['failed_analyses'] += stats['failed_analyses']
             total_stats['projects_found'] += stats['projects_found']
         
-        # Brief pause between content types
+        # Brief pause between content types (longer for Medium to avoid rate limits)
         if stats and stats['projects_found'] > 0:
-            print(f"\nWaiting 30 seconds before processing next content type...")
-            time.sleep(30)
+            wait_time = 60 if content_type == 'medium' else 30
+            print(f"\nWaiting {wait_time} seconds before processing next content type...")
+            time.sleep(wait_time)
     
     # Final summary
     print(f"\n{'='*60}")

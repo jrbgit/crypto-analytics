@@ -13,6 +13,7 @@ import requests
 import time
 import hashlib
 import feedparser
+import random
 from urllib.parse import urljoin, urlparse, parse_qs
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
@@ -66,7 +67,7 @@ class MediumAnalysisResult:
 class MediumScraper:
     """Intelligent Medium scraper for cryptocurrency projects."""
     
-    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 2.0):
+    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 5.0):
         """
         Initialize the Medium scraper.
         
@@ -79,6 +80,8 @@ class MediumScraper:
         self.recent_days = recent_days
         self.delay = delay
         self.session = requests.Session()
+        self.request_count = 0
+        self.last_request_time = 0
         
         # Set a reasonable user agent
         self.session.headers.update({
@@ -106,6 +109,68 @@ class MediumScraper:
             'update', 'progress', 'milestone', 'roadmap', 'quarterly', 'monthly',
             'weekly', 'report', 'summary', 'recap'
         ]
+    
+    def _wait_with_backoff(self, attempt: int = 0):
+        """
+        Implement exponential backoff with jitter for rate limiting.
+        """
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        # Base delay with exponential backoff for retries
+        base_delay = self.delay + (2 ** attempt)
+        
+        # Add random jitter (±20%)
+        jitter = random.uniform(0.8, 1.2)
+        total_delay = base_delay * jitter
+        
+        # Ensure minimum time between requests
+        if time_since_last < total_delay:
+            sleep_time = total_delay - time_since_last
+            logger.debug(f"Rate limiting: waiting {sleep_time:.2f}s (attempt {attempt})")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+        self.request_count += 1
+        
+        # Add extra delay every 10 requests to avoid overwhelming server
+        if self.request_count % 10 == 0:
+            extra_delay = random.uniform(5, 10)
+            logger.info(f"Extended rate limit break: {extra_delay:.2f}s after {self.request_count} requests")
+            time.sleep(extra_delay)
+    
+    def _make_request_with_retry(self, url: str, max_retries: int = 3) -> requests.Response:
+        """
+        Make HTTP request with retry logic for 429 errors.
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                self._wait_with_backoff(attempt)
+                
+                response = self.session.get(url, timeout=30)
+                
+                if response.status_code == 429:
+                    if attempt < max_retries:
+                        retry_delay = min(60 * (2 ** attempt), 300)  # Cap at 5 minutes
+                        logger.warning(f"Rate limited (429). Retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries + 1})")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error(f"Max retries exceeded for {url}")
+                        response.raise_for_status()
+                
+                response.raise_for_status()
+                return response
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    logger.warning(f"Request failed (attempt {attempt + 1}): {e}")
+                    time.sleep(random.uniform(5, 15))  # Random delay before retry
+                else:
+                    logger.error(f"All retry attempts failed for {url}: {e}")
+                    raise
+        
+        return response
     
     def construct_feed_url(self, medium_url: str) -> str:
         """
@@ -190,10 +255,7 @@ class MediumScraper:
             Tuple of (content, reading_time_minutes, claps)
         """
         try:
-            time.sleep(self.delay)  # Rate limiting
-            
-            response = self.session.get(article_url, timeout=30)
-            response.raise_for_status()
+            response = self._make_request_with_retry(article_url)
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
@@ -252,9 +314,8 @@ class MediumScraper:
         try:
             logger.info(f"Fetching RSS feed: {feed_url}")
             
-            # Fetch RSS feed
-            response = self.session.get(feed_url, timeout=30)
-            response.raise_for_status()
+            # Fetch RSS feed with rate limiting and retry logic
+            response = self._make_request_with_retry(feed_url)
             
             # Parse RSS with feedparser
             feed = feedparser.parse(response.content)

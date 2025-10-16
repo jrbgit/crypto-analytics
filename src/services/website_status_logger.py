@@ -205,6 +205,34 @@ class WebsiteStatusLogger:
         
         logger.error(f"Connection error: {url} - {error_message}")
     
+    def log_dns_error(self, link_id: int, url: str, error_message: str = None):
+        """Log DNS resolution failures - quieter logging since domain may not exist."""
+        
+        self.log_website_status(
+            link_id=link_id,
+            status_type=WebsiteStatusType.DNS_FAILURE,
+            status_message=f"DNS resolution failed for {url}",
+            error_type=WebsiteErrorType.DNS_RESOLUTION_ERROR,
+            error_details=error_message or "Domain not found",
+            dns_resolved=False
+        )
+        
+        logger.debug(f"DNS resolution failed: {url} - domain may not exist")
+    
+    def log_ssl_error(self, link_id: int, url: str, error_message: str = None):
+        """Log SSL certificate errors - quieter logging since cert may be expired/invalid."""
+        
+        self.log_website_status(
+            link_id=link_id,
+            status_type=WebsiteStatusType.SSL_ERROR,
+            status_message=f"SSL certificate error for {url}",
+            error_type=WebsiteErrorType.SSL_CERTIFICATE_ERROR,
+            error_details=error_message or "Certificate invalid or expired",
+            ssl_valid=False
+        )
+        
+        logger.debug(f"SSL certificate error: {url} - certificate invalid or expired")
+    
     def log_no_pages_scraped(self, link_id: int, url: str, reason: str = None):
         """Log when no pages could be scraped (but without treating as error)."""
         

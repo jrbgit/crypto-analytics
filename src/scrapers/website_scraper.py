@@ -61,6 +61,7 @@ class WebsiteAnalysisResult:
     parked_pages_detected: int = 0
     total_content_length: int = 0
     detected_parking_service: Optional[str] = None
+    error_type: Optional[str] = None  # Specific error type for better categorization
 
 
 class WebsiteScraper:
@@ -94,8 +95,12 @@ class WebsiteScraper:
             'roadmap': ['roadmap', 'timeline', 'milestones', 'development']
         }
     
-    def can_fetch(self, url: str) -> bool:
-        """Check if we can fetch the URL according to robots.txt."""
+    def can_fetch(self, url: str) -> Tuple[bool, Optional[str]]:
+        """Check if we can fetch the URL according to robots.txt.
+        
+        Returns:
+            Tuple of (can_fetch: bool, error_info: Optional[str])
+        """
         try:
             parsed_url = urlparse(url)
             robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
@@ -104,10 +109,23 @@ class WebsiteScraper:
             rp.set_url(robots_url)
             rp.read()
             
-            return rp.can_fetch(self.session.headers['User-Agent'], url)
+            return rp.can_fetch(self.session.headers['User-Agent'], url), None
         except Exception as e:
-            logger.warning(f"Could not check robots.txt for {url}: {e}")
-            return True  # Default to allowing if we can't check
+            error_msg = str(e)
+            
+            # Categorize robots.txt fetch errors for quieter logging
+            if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
+                logger.debug(f"Cannot check robots.txt for {url}: DNS resolution failed")
+                return True, 'dns_resolution_error'  # Allow if we can't resolve DNS
+            elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
+                logger.debug(f"Cannot check robots.txt for {url}: SSL certificate error")
+                return True, 'ssl_certificate_error'  # Allow if SSL issues
+            elif "timeout" in error_msg.lower():
+                logger.debug(f"Cannot check robots.txt for {url}: Connection timeout")
+                return True, 'connection_timeout'  # Allow if timeout
+            else:
+                logger.debug(f"Cannot check robots.txt for {url}: {error_msg[:100]}...")
+                return True, 'unknown_robots_error'  # Default to allowing if we can't check
     
     def classify_page_type(self, url: str, title: str, content: str) -> str:
         """Classify the type of page based on URL, title, and content."""
@@ -204,9 +222,12 @@ class WebsiteScraper:
             logger.debug(f"Skipping {url}: {skip_reason}")
             return None, status_info
         
-        if not self.can_fetch(url):
-            logger.warning(f"Robots.txt disallows fetching {url}")
+        can_fetch, robots_error = self.can_fetch(url)
+        if not can_fetch:
+            logger.debug(f"Robots.txt check failed or disallows fetching {url}")
             status_info['robots_blocked'] = True
+            if robots_error:
+                status_info['robots_error_type'] = robots_error
             return None, status_info
         
         try:
@@ -261,7 +282,27 @@ class WebsiteScraper:
             return page, status_info
             
         except Exception as e:
-            logger.error(f"Failed to fetch {url}: {e}")
+            error_msg = str(e)
+            
+            # Categorize the error for better status logging
+            if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
+                logger.warning(f"DNS resolution failed for {url}: Domain not found")
+                status_info['error_type'] = 'dns_resolution_error'
+                status_info['dns_resolved'] = False
+            elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
+                logger.warning(f"SSL certificate error for {url}: {error_msg[:100]}...")
+                status_info['error_type'] = 'ssl_certificate_error'
+                status_info['ssl_valid'] = False
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                logger.warning(f"Connection timeout for {url}")
+                status_info['error_type'] = 'connection_timeout'
+            elif "Max retries exceeded" in error_msg:
+                logger.warning(f"Connection failed after retries for {url}")
+                status_info['error_type'] = 'connection_retries_exhausted'
+            else:
+                logger.error(f"Failed to fetch {url}: {e}")
+                status_info['error_type'] = 'unknown_connection_error'
+            
             return None, status_info
     
     def prioritize_links(self, links: List[str], visited: Set[str]) -> List[str]:
@@ -326,6 +367,7 @@ class WebsiteScraper:
         robots_blocked = False
         parked_pages_detected = 0
         detected_parking_service = None
+        primary_error_type = None  # Track the most common or first encountered error type
         
         while to_visit and len(scraped_pages) < self.max_pages:
             url, depth = to_visit.pop(0)
@@ -345,6 +387,10 @@ class WebsiteScraper:
                 parked_pages_detected += 1
                 if status_info['parking_service']:
                     detected_parking_service = status_info['parking_service']
+            
+            # Track error types for better status reporting
+            if 'error_type' in status_info and status_info['error_type'] and not primary_error_type:
+                primary_error_type = status_info['error_type']
             
             if page:
                 scraped_pages.append(page)
@@ -382,7 +428,8 @@ class WebsiteScraper:
             robots_blocked=robots_blocked,
             parked_pages_detected=parked_pages_detected,
             total_content_length=total_content_length,
-            detected_parking_service=detected_parking_service
+            detected_parking_service=detected_parking_service,
+            error_type=primary_error_type
         )
         
         if not result.scrape_success:
