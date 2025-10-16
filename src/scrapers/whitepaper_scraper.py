@@ -139,8 +139,32 @@ class WhitepaperScraper:
             else:
                 return self._extract_webpage_content(url)
                 
-        except Exception as e:
-            logger.error(f"Failed to scrape whitepaper {url}: {e}")
+        except requests.exceptions.HTTPError as e:
+            # Handle HTTP status code errors specifically
+            if e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 404:
+                    logger.warning(f"Whitepaper not found (404) for {url} - website issue, not our code")
+                    error_type = 'http_404_not_found'
+                elif status_code == 403:
+                    logger.warning(f"Access forbidden (403) for whitepaper {url}")
+                    error_type = 'http_403_forbidden'
+                elif status_code == 401:
+                    logger.warning(f"Authentication required (401) for whitepaper {url}")
+                    error_type = 'http_401_unauthorized'
+                elif 400 <= status_code < 500:
+                    logger.warning(f"Client error ({status_code}) for whitepaper {url}: {e}")
+                    error_type = f'http_{status_code}_client_error'
+                elif 500 <= status_code < 600:
+                    logger.warning(f"Server error ({status_code}) for whitepaper {url}: {e}")
+                    error_type = f'http_{status_code}_server_error'
+                else:
+                    logger.error(f"HTTP error ({status_code}) for whitepaper {url}: {e}")
+                    error_type = f'http_{status_code}_error'
+            else:
+                logger.error(f"HTTP error for whitepaper {url}: {e}")
+                error_type = 'http_error_no_response'
+            
             return WhitepaperContent(
                 url=url,
                 content_type='unknown',
@@ -151,7 +175,42 @@ class WhitepaperScraper:
                 content_hash='',
                 extraction_method='none',
                 success=False,
-                error_message=str(e)
+                error_message=f"{error_type}: {str(e)}"
+            )
+        except Exception as e:
+            error_msg = str(e)
+            
+            # Categorize the error for better logging
+            if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
+                logger.warning(f"DNS resolution failed for whitepaper {url}: Domain not found")
+                error_type = 'dns_resolution_error'
+            elif "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
+                logger.warning(f"SSL certificate error for whitepaper {url}: {error_msg[:100]}...")
+                error_type = 'ssl_certificate_error'
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                logger.warning(f"Connection timeout for whitepaper {url}")
+                error_type = 'connection_timeout'
+            elif "Max retries exceeded" in error_msg:
+                logger.warning(f"Connection failed after retries for whitepaper {url}")
+                error_type = 'connection_retries_exhausted'
+            elif "ConnectTimeoutError" in error_msg:
+                logger.warning(f"Connection timeout for whitepaper {url}")
+                error_type = 'connection_timeout'
+            else:
+                logger.error(f"Failed to scrape whitepaper {url}: {e}")
+                error_type = 'unknown_error'
+            
+            return WhitepaperContent(
+                url=url,
+                content_type='unknown',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='none',
+                success=False,
+                error_message=f"{error_type}: {str(e)}"
             )
     
     def _extract_pdf_content(self, url: str) -> WhitepaperContent:
@@ -334,20 +393,6 @@ class WhitepaperScraper:
                 success=True
             )
             
-        except Exception as e:
-            logger.error(f"Failed to extract webpage content from {url}: {e}")
-            return WhitepaperContent(
-                url=url,
-                content_type='webpage',
-                title=None,
-                content='',
-                word_count=0,
-                page_count=None,
-                content_hash='',
-                extraction_method='none',
-                success=False,
-                error_message=str(e)
-            )
     
     def _clean_pdf_content(self, content: str) -> str:
         """Clean and normalize PDF-extracted content."""

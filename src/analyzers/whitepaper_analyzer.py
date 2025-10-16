@@ -354,7 +354,7 @@ Content to analyze:
             WhitepaperAnalysis object or None if analysis failed
         """
         if not content or not content.strip():
-            logger.error("No content provided for analysis")
+            logger.warning("No content provided for analysis - likely empty webpage or failed extraction")
             return None
         
         logger.info(f"Starting LLM analysis of {document_type} whitepaper ({word_count} words)")

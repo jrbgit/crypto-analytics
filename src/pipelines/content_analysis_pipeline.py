@@ -334,8 +334,21 @@ class ContentAnalysisPipeline:
         scrape_result = self.whitepaper_scraper.scrape_whitepaper(whitepaper_link.url)
         
         if not scrape_result.success:
-            logger.error(f"Whitepaper scraping failed for {whitepaper_link.url}: {scrape_result.error_message}")
-            self._update_scrape_status(whitepaper_link, success=False, error=scrape_result.error_message)
+            error_msg = scrape_result.error_message or "Unknown scraping error"
+            
+            # Categorize scraping errors for better logging
+            if "404" in error_msg or "not found" in error_msg.lower():
+                logger.warning(f"Whitepaper not found (404) for {whitepaper_link.url} - website issue")
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                logger.warning(f"Connection timeout for whitepaper {whitepaper_link.url}")
+            elif "dns_resolution" in error_msg.lower():
+                logger.warning(f"DNS resolution failed for whitepaper {whitepaper_link.url}")
+            elif "ssl" in error_msg.lower() or "certificate" in error_msg.lower():
+                logger.warning(f"SSL certificate error for whitepaper {whitepaper_link.url}")
+            else:
+                logger.error(f"Whitepaper scraping failed for {whitepaper_link.url}: {error_msg}")
+                
+            self._update_scrape_status(whitepaper_link, success=False, error=error_msg)
             return None
         
         # Step 2: Analyze with LLM
@@ -347,7 +360,7 @@ class ContentAnalysisPipeline:
         )
         
         if not whitepaper_analysis:
-            logger.error(f"Whitepaper LLM analysis failed for {whitepaper_link.url}")
+            logger.warning(f"Whitepaper LLM analysis failed for {whitepaper_link.url} - likely empty content or extraction issues")
             self._update_scrape_status(whitepaper_link, success=False, error="LLM analysis failed")
             return None
         
