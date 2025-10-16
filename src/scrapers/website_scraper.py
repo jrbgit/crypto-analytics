@@ -330,6 +330,33 @@ class WebsiteScraper:
             logger.success(f"Scraped {url} - {page_type} page ({word_count} words)")
             return page, status_info
             
+        except requests.exceptions.HTTPError as e:
+            # Handle HTTP status code errors specifically
+            if e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 404:
+                    logger.warning(f"Page not found (404) for {url} - website issue, not our code")
+                    status_info['error_type'] = 'http_404_not_found'
+                elif status_code == 403:
+                    logger.warning(f"Access forbidden (403) for {url}")
+                    status_info['error_type'] = 'http_403_forbidden'
+                elif status_code == 401:
+                    logger.warning(f"Authentication required (401) for {url}")
+                    status_info['error_type'] = 'http_401_unauthorized'
+                elif 400 <= status_code < 500:
+                    logger.warning(f"Client error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_client_error'
+                elif 500 <= status_code < 600:
+                    logger.warning(f"Server error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_server_error'
+                else:
+                    logger.error(f"HTTP error ({status_code}) for {url}: {e}")
+                    status_info['error_type'] = f'http_{status_code}_error'
+            else:
+                logger.error(f"HTTP error for {url}: {e}")
+                status_info['error_type'] = 'http_error_no_response'
+            
+            return None, status_info
         except Exception as e:
             error_msg = str(e)
             
