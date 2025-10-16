@@ -232,8 +232,57 @@ class WebsiteScraper:
         
         try:
             logger.debug(f"Fetching: {url}")
+            
+            # First, make a HEAD request to check content type and size (if supported)
+            try:
+                head_response = self.session.head(url, timeout=15, allow_redirects=True)
+                
+                # Check content type to avoid downloading non-analyzable files
+                content_type = head_response.headers.get('content-type', '').lower()
+                if content_type:
+                    # Skip if content type indicates non-analyzable file
+                    non_analyzable_types = [
+                        'application/octet-stream',  # Generic binary
+                        'application/zip', 'application/x-zip',
+                        'application/x-executable', 'application/x-msdownload',
+                        'application/vnd.android.package-archive',  # APK files
+                        'application/java-archive',  # JAR files
+                        'application/x-deb', 'application/x-rpm',  # Package files
+                        'application/x-apple-diskimage',  # DMG files
+                        'audio/', 'video/', 'image/'  # Media files
+                    ]
+                    
+                    # Check if content type starts with any non-analyzable type
+                    for non_type in non_analyzable_types:
+                        if content_type.startswith(non_type):
+                            logger.debug(f"Skipping {url}: non-analyzable content type {content_type}")
+                            return None, status_info
+                
+                # Check file size to avoid very large downloads
+                content_length = head_response.headers.get('content-length')
+                if content_length:
+                    try:
+                        size_mb = int(content_length) / (1024 * 1024)
+                        if size_mb > 50:  # Skip files larger than 50MB
+                            logger.debug(f"Skipping {url}: file too large ({size_mb:.1f}MB)")
+                            return None, status_info
+                    except ValueError:
+                        pass  # Continue if size can't be parsed
+                        
+            except Exception:
+                # If HEAD request fails, continue with GET (some servers don't support HEAD)
+                logger.debug(f"HEAD request failed for {url}, proceeding with GET")
+                pass
+            
+            # Now make the actual GET request
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
+            
+            # Double-check content type after GET request
+            response_content_type = response.headers.get('content-type', '').lower()
+            if response_content_type and not any(analyzable in response_content_type for analyzable in ['text/', 'html', 'xml', 'json', 'application/pdf']):
+                logger.debug(f"Skipping {url}: response content type not analyzable ({response_content_type})")
+                return None, status_info
             
             # Extract content
             content, title, links = self.extract_content(response.text, url)

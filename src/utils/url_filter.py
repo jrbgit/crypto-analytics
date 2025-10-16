@@ -11,19 +11,30 @@ from typing import Tuple, Optional
 class URLFilter:
     """Filters URLs to avoid scraping problematic or non-content URLs"""
     
-    # File extensions to skip
+    # File extensions to skip - non-LLM-analyzable files
     SKIP_EXTENSIONS = {
         # Archives
-        '.zip', '.tar', '.tar.gz', '.tgz', '.rar', '.7z', '.bz2', '.xz',
-        # Executables
-        '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage',
+        '.zip', '.tar', '.tar.gz', '.tgz', '.rar', '.7z', '.bz2', '.xz', '.gz',
+        # Executables and installers
+        '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.run',
+        '.bat', '.sh', '.command', '.scr', '.com',
+        # Mobile apps
+        '.apk', '.ipa', '.aab', '.xap',
         # Media files
         '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac', '.jpg', '.jpeg', '.png', 
-        '.gif', '.svg', '.ico', '.webp', '.tiff', '.bmp',
+        '.gif', '.svg', '.ico', '.webp', '.tiff', '.bmp', '.mkv', '.flv', '.webm',
+        '.ogg', '.m4a', '.aac', '.wma', '.m4v', '.wmv', '.3gp',
         # Documents (that are better handled specifically)
-        '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
+        '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.odt', '.ods', '.odp',
+        # Development files
+        '.jar', '.war', '.ear', '.class', '.so', '.dll', '.dylib', '.a', '.lib',
+        '.obj', '.o', '.pyc', '.pyo', '.cache',
+        # Database files
+        '.db', '.sqlite', '.sqlite3', '.mdb', '.accdb',
+        # Configuration/data files that aren't readable
+        '.dat', '.log', '.tmp', '.temp', '.bak', '.old', '.orig',
         # Other binary formats
-        '.bin', '.img', '.iso', '.torrent'
+        '.bin', '.img', '.iso', '.torrent', '.cab', '.msp', '.patch'
     }
     
     # URL patterns that indicate non-content pages
@@ -45,11 +56,11 @@ class URLFilter:
         r'/img/',
         r'/fonts/',
         
-        # API endpoints
+        # API endpoints and feeds (be more specific)
         r'/api/',
         r'/v\d+/',
-        r'\.json$',
-        r'\.xml$',
+        r'/api/.*\.json$',  # API JSON endpoints
+        r'/feed\.xml$',     # RSS/XML feeds (exact match)
         r'\.rss$',
         
         # Login/account pages
