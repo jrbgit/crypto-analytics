@@ -130,7 +130,7 @@ def main():
                 AVG(CAST(lca.confidence_score AS REAL)) as avg_confidence
             FROM link_content_analysis lca
             JOIN project_links pl ON lca.link_id = pl.id
-            WHERE lca.created_at > datetime('now', '-1 day')
+            WHERE lca.created_at > NOW() - INTERVAL '1 day'
             GROUP BY pl.link_type
             ORDER BY count DESC
         """)).fetchall()
@@ -175,7 +175,7 @@ def main():
         # Calculate processing rate based on recent activity
         analyses_last_hour = session.execute(text("""
             SELECT COUNT(*) FROM link_content_analysis 
-            WHERE created_at > datetime('now', '-1 hour')
+            WHERE created_at > NOW() - INTERVAL '1 hour'
         """)).scalar()
         
         if analyses_last_hour > 0:
