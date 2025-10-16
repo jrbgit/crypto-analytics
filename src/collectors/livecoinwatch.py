@@ -267,7 +267,7 @@ class LiveCoinWatchClient:
                 logger.info(f"Creating new project: {coin_data['name']} ({coin_data['code']})")
             
             # Update project data (sanitize string fields)
-            project.name = self._sanitize_string_value(coin_data.get('name'), 255, 'project_name')
+            project.name = self._sanitize_string_value(coin_data.get('name'), 200, 'project_name')
             project.rank = coin_data.get('rank')
             project.age = coin_data.get('age')
             project.color = self._sanitize_string_value(coin_data.get('color'), 50, 'project_color')
