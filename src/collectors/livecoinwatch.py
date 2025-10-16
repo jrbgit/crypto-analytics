@@ -593,7 +593,7 @@ class LiveCoinWatchClient:
                 'today_usage': today_usage,
                 'remaining': self.rate_limit.daily_limit - today_usage,
                 'current_session_usage': self.rate_limit.current_usage,
-                'last_reset': self.rate_limit.last_reset
+                'last_reset': self.rate_limit.last_reset.strftime('%Y-%m-%d %H:%M:%S UTC')
             }
 
 
