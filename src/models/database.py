@@ -183,7 +183,7 @@ class LinkContentAnalysis(Base):
     
     # Development and innovation
     innovations = Column(JSON)  # Novel approaches or features
-    development_stage = Column(String(50))  # concept, development, testnet, mainnet, mature
+    development_stage = Column(String(200))  # concept, development, testnet, mainnet, mature - increased for detailed descriptions
     roadmap_items = Column(JSON)  # Key roadmap milestones
     
     # Analysis scores and metadata
@@ -195,9 +195,9 @@ class LinkContentAnalysis(Base):
     
     # Whitepaper-specific fields
     document_structure_score = Column(Integer)  # 1-10, organization and clarity
-    document_type = Column(String(20))  # 'pdf', 'webpage', etc.
+    document_type = Column(String(50))  # 'pdf', 'webpage', etc. - increased for longer type names
     page_count = Column(Integer)  # For PDFs
-    extraction_method = Column(String(50))  # Which method was used to extract content
+    extraction_method = Column(String(100))  # Which method was used to extract content - increased for longer method names
     
     # Tokenomics and economics
     has_tokenomics = Column(Boolean, default=False)
@@ -244,7 +244,7 @@ class LinkContentAnalysis(Base):
     technical_summary = Column(Text)  # Technical summary
     
     # Analysis metadata
-    model_used = Column(String(50))
+    model_used = Column(String(100))  # Increased for longer model names like 'llama3.1:latest'
     tokens_consumed = Column(Integer)
     analysis_version = Column(String(20), default='2.0')
     
