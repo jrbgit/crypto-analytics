@@ -317,6 +317,9 @@ class LiveCoinWatchClient:
             session.commit()
             logger.success(f"Updated project: {project.name}")
             
+            # Small sleep after database commit to reduce load
+            time.sleep(0.05)
+            
             return project
     
     def _track_changes(self, session, project: CryptoProject, new_data: Dict):
@@ -475,6 +478,8 @@ class LiveCoinWatchClient:
                 try:
                     project = self.process_coin_data(coin_data)
                     projects.append(project)
+                    # Small sleep to reduce database load
+                    time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
                     continue
@@ -552,6 +557,8 @@ class LiveCoinWatchClient:
                     project = self.process_coin_data(coin_data)
                     projects.append(project)
                     batch_processed += 1
+                    # Small sleep to reduce database load
+                    time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
                     continue
