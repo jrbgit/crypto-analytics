@@ -393,6 +393,20 @@ class WhitepaperScraper:
                 success=True
             )
             
+        except Exception as e:
+            logger.error(f"Failed to extract webpage content from {url}: {e}")
+            return WhitepaperContent(
+                url=url,
+                content_type='webpage',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='beautifulsoup_failed',
+                success=False,
+                error_message=f"Webpage extraction failed: {e}"
+            )
     
     def _clean_pdf_content(self, content: str) -> str:
         """Clean and normalize PDF-extracted content."""

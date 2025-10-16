@@ -65,7 +65,7 @@ def main():
     pipeline = ContentAnalysisPipeline(
         db_manager=db_manager,
         scraper_config={
-            'max_pages': 8,         # Website pages
+            'max_pages': 10,         # Website pages
             'max_depth': 2,         # Website depth
             'max_articles': 10,     # Medium articles (reduced)
             'max_posts': 50,        # Reddit posts
