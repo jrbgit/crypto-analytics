@@ -86,12 +86,31 @@ class ProjectLink(Base):
     last_scraped = Column(DateTime)
     scrape_success = Column(Boolean)
     
+    # Website status tracking
+    current_website_status = Column(String(50), default='unknown')
+    last_status_check = Column(DateTime)
+    consecutive_failures = Column(Integer, default=0)
+    first_failure_date = Column(DateTime)
+    domain_parked_detected = Column(Boolean, default=False)
+    robots_txt_blocks_scraping = Column(Boolean, default=False)
+    
+    # Whitepaper status tracking
+    current_whitepaper_status = Column(String(50), default='unknown')
+    last_whitepaper_check = Column(DateTime)
+    whitepaper_consecutive_failures = Column(Integer, default=0)
+    whitepaper_first_failure_date = Column(DateTime)
+    whitepaper_access_restricted = Column(Boolean, default=False)
+    whitepaper_format_detected = Column(String(20))  # pdf, webpage, etc.
+    whitepaper_last_successful_extraction = Column(DateTime)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     project = relationship("CryptoProject", back_populates="links")
     content_analysis = relationship("LinkContentAnalysis", back_populates="link", cascade="all, delete-orphan")
+    status_logs = relationship("WebsiteStatusLog", back_populates="link", cascade="all, delete-orphan")
+    whitepaper_status_logs = relationship("WhitepaperStatusLog", back_populates="link", cascade="all, delete-orphan")
 
 
 class ProjectImage(Base):
