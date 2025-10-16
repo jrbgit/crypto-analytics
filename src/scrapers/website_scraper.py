@@ -13,7 +13,7 @@ import time
 import hashlib
 import urllib.robotparser
 from urllib.parse import urljoin, urlparse, parse_qs
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from pathlib import Path
@@ -54,6 +54,13 @@ class WebsiteAnalysisResult:
     scrape_success: bool
     error_message: Optional[str] = None
     analysis_timestamp: datetime = None
+    
+    # Enhanced status tracking
+    status_type: Optional[str] = None  # 'success', 'robots_blocked', 'parked_domain', 'no_content', etc.
+    robots_blocked: bool = False
+    parked_pages_detected: int = 0
+    total_content_length: int = 0
+    detected_parking_service: Optional[str] = None
 
 
 class WebsiteScraper:
@@ -183,17 +190,24 @@ class WebsiteScraper:
         
         return content, title, list(set(links))  # Remove duplicates
     
-    def fetch_page(self, url: str) -> Optional[ScrapedPage]:
-        """Fetch and process a single page."""
+    def fetch_page(self, url: str) -> Tuple[Optional[ScrapedPage], Dict[str, Any]]:
+        """Fetch and process a single page.
+        
+        Returns:
+            Tuple of (ScrapedPage or None, status_info dict)
+        """
+        status_info = {'robots_blocked': False, 'parked_detected': False, 'parking_service': None}
+        
         # Check URL filter first
         should_skip, skip_reason = url_filter.should_skip_url(url)
         if should_skip:
             logger.debug(f"Skipping {url}: {skip_reason}")
-            return None
+            return None, status_info
         
         if not self.can_fetch(url):
             logger.warning(f"Robots.txt disallows fetching {url}")
-            return None
+            status_info['robots_blocked'] = True
+            return None, status_info
         
         try:
             logger.debug(f"Fetching: {url}")
@@ -206,12 +220,21 @@ class WebsiteScraper:
             # Check if content indicates a parked domain
             if url_filter.is_likely_parked_domain(content):
                 logger.warning(f"Detected parked/for-sale domain: {url}")
-                return None
+                status_info['parked_detected'] = True
+                # Try to detect parking service from content
+                content_lower = content.lower()
+                if 'godaddy' in content_lower:
+                    status_info['parking_service'] = 'GoDaddy'
+                elif 'sedo' in content_lower:
+                    status_info['parking_service'] = 'Sedo'
+                elif 'namecheap' in content_lower:
+                    status_info['parking_service'] = 'Namecheap'
+                return None, status_info
             
             # Skip if content is too minimal
             if len(content.strip()) < 50:
                 logger.debug(f"Skipping {url}: minimal content ({len(content)} chars)")
-                return None
+                return None, status_info
             
             # Calculate content hash
             content_hash = hashlib.sha256(content.encode()).hexdigest()
@@ -235,11 +258,11 @@ class WebsiteScraper:
             )
             
             logger.success(f"Scraped {url} - {page_type} page ({word_count} words)")
-            return page
+            return page, status_info
             
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
-            return None
+            return None, status_info
     
     def prioritize_links(self, links: List[str], visited: Set[str]) -> List[str]:
         """Prioritize links based on importance keywords."""
@@ -300,6 +323,9 @@ class WebsiteScraper:
         visited = set()
         to_visit = [(base_url, 0)]  # (url, depth)
         scraped_pages = []
+        robots_blocked = False
+        parked_pages_detected = 0
+        detected_parking_service = None
         
         while to_visit and len(scraped_pages) < self.max_pages:
             url, depth = to_visit.pop(0)
@@ -310,7 +336,16 @@ class WebsiteScraper:
             visited.add(url)
             
             # Fetch the page
-            page = self.fetch_page(url)
+            page, status_info = self.fetch_page(url)
+            
+            # Track status information
+            if status_info['robots_blocked']:
+                robots_blocked = True
+            if status_info['parked_detected']:
+                parked_pages_detected += 1
+                if status_info['parking_service']:
+                    detected_parking_service = status_info['parking_service']
+            
             if page:
                 scraped_pages.append(page)
                 
@@ -324,17 +359,39 @@ class WebsiteScraper:
             if self.delay > 0:
                 time.sleep(self.delay)
         
+        # Calculate total content length
+        total_content_length = sum(page.word_count for page in scraped_pages)
+        
+        # Determine status type
+        status_type = 'success'
+        if robots_blocked and len(scraped_pages) == 0:
+            status_type = 'robots_blocked'
+        elif parked_pages_detected > 0 and len(scraped_pages) == 0:
+            status_type = 'parked_domain'
+        elif len(scraped_pages) == 0:
+            status_type = 'no_content'
+        
         # Create result
         result = WebsiteAnalysisResult(
             domain=domain,
             pages_scraped=scraped_pages,
             total_pages=len(scraped_pages),
             scrape_success=len(scraped_pages) > 0,
-            analysis_timestamp=datetime.now(UTC)
+            analysis_timestamp=datetime.now(UTC),
+            status_type=status_type,
+            robots_blocked=robots_blocked,
+            parked_pages_detected=parked_pages_detected,
+            total_content_length=total_content_length,
+            detected_parking_service=detected_parking_service
         )
         
         if not result.scrape_success:
-            result.error_message = "No pages could be scraped"
+            if robots_blocked:
+                result.error_message = "Robots.txt disallows scraping"
+            elif parked_pages_detected > 0:
+                result.error_message = "Domain appears to be parked/for-sale"
+            else:
+                result.error_message = "No pages could be scraped"
         
         logger.info(f"Website analysis complete for {domain}: {len(scraped_pages)} pages scraped")
         

@@ -42,22 +42,30 @@ class WebsiteStatusLogger:
         
         try:
             with self.db_manager.get_session() as session:
+                from sqlalchemy import text
                 # Insert into website_status_log table
-                session.execute("""
+                session.execute(text("""
                     INSERT INTO website_status_log (
                         link_id, status_type, status_message, pages_attempted, pages_successful,
                         pages_parked, total_content_length, http_status_code, response_time_ms,
                         dns_resolved, ssl_valid, has_robots_txt, robots_allows_scraping,
                         detected_cms, detected_parking_service, error_type, error_details
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        :link_id, :status_type, :status_message, :pages_attempted, :pages_successful,
+                        :pages_parked, :total_content_length, :http_status_code, :response_time_ms,
+                        :dns_resolved, :ssl_valid, :has_robots_txt, :robots_allows_scraping,
+                        :detected_cms, :detected_parking_service, :error_type, :error_details
                     )
-                """, (
-                    link_id, status_type, status_message, pages_attempted, pages_successful,
-                    pages_parked, total_content_length, http_status_code, response_time_ms,
-                    dns_resolved, ssl_valid, has_robots_txt, robots_allows_scraping,
-                    detected_cms, detected_parking_service, error_type, error_details
-                ))
+                """), {
+                    'link_id': link_id, 'status_type': status_type, 'status_message': status_message, 
+                    'pages_attempted': pages_attempted, 'pages_successful': pages_successful,
+                    'pages_parked': pages_parked, 'total_content_length': total_content_length, 
+                    'http_status_code': http_status_code, 'response_time_ms': response_time_ms,
+                    'dns_resolved': dns_resolved, 'ssl_valid': ssl_valid, 'has_robots_txt': has_robots_txt, 
+                    'robots_allows_scraping': robots_allows_scraping, 'detected_cms': detected_cms, 
+                    'detected_parking_service': detected_parking_service, 'error_type': error_type, 
+                    'error_details': error_details
+                })
                 
                 # Update current status in project_links
                 self._update_link_current_status(session, link_id, status_type)
@@ -84,29 +92,31 @@ class WebsiteStatusLogger:
             WebsiteStatusType.UNKNOWN_ERROR
         ]
         
+        from sqlalchemy import text
+        
         if is_failure:
             # Increment consecutive failures
-            session.execute("""
+            session.execute(text("""
                 UPDATE project_links 
-                SET current_website_status = %s,
+                SET current_website_status = :status_type,
                     last_status_check = NOW(),
                     consecutive_failures = consecutive_failures + 1,
                     first_failure_date = COALESCE(first_failure_date, NOW()),
-                    domain_parked_detected = CASE WHEN %s = 'parked_domain' THEN TRUE ELSE domain_parked_detected END,
-                    robots_txt_blocks_scraping = CASE WHEN %s = 'robots_blocked' THEN TRUE ELSE robots_txt_blocks_scraping END
-                WHERE id = %s
-            """, (status_type, status_type, status_type, link_id))
+                    domain_parked_detected = CASE WHEN :status_type2 = 'parked_domain' THEN TRUE ELSE domain_parked_detected END,
+                    robots_txt_blocks_scraping = CASE WHEN :status_type3 = 'robots_blocked' THEN TRUE ELSE robots_txt_blocks_scraping END
+                WHERE id = :link_id
+            """), {'status_type': status_type, 'status_type2': status_type, 'status_type3': status_type, 'link_id': link_id})
         else:
             # Reset failure counters on success
-            session.execute("""
+            session.execute(text("""
                 UPDATE project_links 
-                SET current_website_status = %s,
+                SET current_website_status = :status_type,
                     last_status_check = NOW(),
                     consecutive_failures = 0,
                     first_failure_date = NULL,
-                    robots_txt_blocks_scraping = CASE WHEN %s = 'robots_blocked' THEN TRUE ELSE FALSE END
-                WHERE id = %s
-            """, (status_type, status_type, link_id))
+                    robots_txt_blocks_scraping = CASE WHEN :status_type2 = 'robots_blocked' THEN TRUE ELSE FALSE END
+                WHERE id = :link_id
+            """), {'status_type': status_type, 'status_type2': status_type, 'link_id': link_id})
     
     def log_robots_blocked(self, link_id: int, url: str, robots_message: str = None):
         """Log when robots.txt blocks scraping - this is NOT an error."""
@@ -214,21 +224,23 @@ class WebsiteStatusLogger:
         
         try:
             with self.db_manager.get_session() as session:
+                from sqlalchemy import text
+                
                 if project_id:
                     # Get status for specific project
-                    result = session.execute("""
+                    result = session.execute(text("""
                         SELECT 
                             current_website_status,
                             COUNT(*) as count,
                             AVG(consecutive_failures) as avg_failures
                         FROM project_links pl
                         JOIN crypto_projects cp ON pl.project_id = cp.id
-                        WHERE cp.id = %s AND pl.link_type = 'website'
+                        WHERE cp.id = :project_id AND pl.link_type = 'website'
                         GROUP BY current_website_status
-                    """, (project_id,))
+                    """), {'project_id': project_id})
                 else:
                     # Get overall status summary
-                    result = session.execute("""
+                    result = session.execute(text("""
                         SELECT 
                             current_website_status,
                             COUNT(*) as count,
@@ -236,7 +248,7 @@ class WebsiteStatusLogger:
                         FROM project_links 
                         WHERE link_type = 'website'
                         GROUP BY current_website_status
-                    """)
+                    """))
                 
                 summary = {}
                 for row in result:

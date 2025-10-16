@@ -29,6 +29,7 @@ from sqlalchemy import and_, or_, select
 # Import our modules
 from models.database import DatabaseManager, CryptoProject, ProjectLink, LinkContentAnalysis, APIUsage
 from scrapers.website_scraper import WebsiteScraper, WebsiteAnalysisResult
+from services.website_status_logger import create_status_logger
 from scrapers.whitepaper_scraper import WhitepaperScraper, WhitepaperContent
 from scrapers.medium_scraper import MediumScraper, MediumAnalysisResult
 from scrapers.reddit_scraper import RedditScraper, RedditAnalysisResult
@@ -58,6 +59,9 @@ class ContentAnalysisPipeline:
             analyzer_config: Configuration for LLM analyzers
         """
         self.db_manager = db_manager
+        
+        # Initialize website status logger
+        self.status_logger = create_status_logger(db_manager)
         
         # Initialize scrapers
         scraper_config = scraper_config or {}
@@ -197,19 +201,75 @@ class ContentAnalysisPipeline:
         scrape_result = self.website_scraper.scrape_website(website_link.url)
         
         if not scrape_result.scrape_success:
-            logger.error(f"Website scraping failed for {website_link.url}: {scrape_result.error_message}")
+            # Log detailed status instead of generic error
+            if scrape_result.status_type == 'robots_blocked':
+                self.status_logger.log_robots_blocked(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    robots_message=scrape_result.error_message
+                )
+            elif scrape_result.status_type == 'parked_domain':
+                self.status_logger.log_parked_domain(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    parking_service=scrape_result.detected_parking_service
+                )
+            elif scrape_result.status_type == 'no_content':
+                self.status_logger.log_no_pages_scraped(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    reason=scrape_result.error_message
+                )
+            else:
+                # Connection or other technical errors
+                self.status_logger.log_connection_error(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    error_message=scrape_result.error_message or "Unknown scraping error"
+                )
+            
+            # Update scrape status without logging as error
             self._update_scrape_status(website_link, success=False, error=scrape_result.error_message)
             return None
         
-        # Step 2: Analyze with LLM
-        website_analysis = self.website_analyzer.analyze_website(
-            scrape_result.pages_scraped, 
-            scrape_result.domain
+        # Log successful scraping
+        self.status_logger.log_scraping_success(
+            link_id=website_link.id,
+            url=website_link.url,
+            pages_scraped=len(scrape_result.pages_scraped),
+            total_content_length=scrape_result.total_content_length
         )
         
-        if not website_analysis:
-            logger.error(f"Website LLM analysis failed for {website_link.url}")
-            self._update_scrape_status(website_link, success=False, error="LLM analysis failed")
+        # Step 2: Analyze with LLM
+        try:
+            website_analysis = self.website_analyzer.analyze_website(
+                scrape_result.pages_scraped, 
+                scrape_result.domain
+            )
+            
+            if not website_analysis:
+                logger.error(f"Website LLM analysis failed for {website_link.url}")
+                self._update_scrape_status(website_link, success=False, error="LLM analysis failed")
+                return None
+        except Exception as analysis_error:
+            # Handle content processing errors (like NUL characters)
+            error_message = str(analysis_error)
+            if "NUL" in error_message or "0x00" in error_message:
+                self.status_logger.log_content_error(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    error_message=error_message
+                )
+                logger.warning(f"Content processing error for {website_link.url}: NUL characters detected")
+            else:
+                self.status_logger.log_content_error(
+                    link_id=website_link.id,
+                    url=website_link.url,
+                    error_message=error_message
+                )
+                logger.error(f"Analysis failed for {project.name}: {error_message}")
+            
+            self._update_scrape_status(website_link, success=False, error=error_message)
             return None
         
         # Step 3: Store results in database
@@ -339,22 +399,6 @@ class ContentAnalysisPipeline:
         
         return analysis_record
     
-    def _update_scrape_status(self, link: ProjectLink, success: bool, error: str = None):
-        """Update the scrape status for a project link."""
-        with self.db_manager.get_session() as session:
-            link_obj = session.merge(link)
-            link_obj.last_scraped = datetime.now(UTC)
-            link_obj.scrape_success = success
-            link_obj.needs_analysis = False  # Mark as processed
-            
-            if not success and error:
-                # Check if this is a filtering/skipping case vs actual error
-                if any(keyword in error.lower() for keyword in ['filtered', 'skipping', 'parked domain', 'minimal content']):
-                    logger.debug(f"Skipped {link_obj.url}: {error}")
-                else:
-                    logger.warning(f"Scrape failed for {link_obj.url}: {error}")
-            
-            session.commit()
     
     def _store_website_analysis_results(self, 
                                       website_link: ProjectLink, 
@@ -777,6 +821,28 @@ class ContentAnalysisPipeline:
             )
             
             session.add(usage)
+            session.commit()
+    
+    def _update_scrape_status(self, link: ProjectLink, success: bool, error: str = None):
+        """Update the scrape status for a project link with reduced log noise."""
+        with self.db_manager.get_session() as session:
+            link_obj = session.merge(link)
+            link_obj.last_scraped = datetime.now(UTC)
+            link_obj.scrape_success = success
+            link_obj.needs_analysis = False  # Mark as processed
+            
+            # Reduced logging - status is now logged by website_status_logger
+            if success:
+                logger.debug(f"Successfully processed {link_obj.url}")
+            else:
+                # Only log actual errors, not expected conditions like robots.txt or parked domains
+                error_lower = (error or '').lower()
+                if any(condition in error_lower for condition in 
+                      ['robots.txt', 'parked', 'for-sale', 'no pages could be scraped']):
+                    logger.debug(f"Processed {link_obj.url}: {error}")
+                else:
+                    logger.warning(f"Processing failed for {link_obj.url}: {error}")
+            
             session.commit()
     
     def run_analysis_batch(self, link_types: List[str] = None, max_projects: int = None) -> Dict[str, int]:
