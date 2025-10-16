@@ -114,27 +114,36 @@ class WhitepaperScraper:
             if self._is_google_drive_url(url):
                 return self._handle_google_drive_url(url)
             
-            # First, check what type of content we're dealing with
-            response = self.session.head(url, timeout=self.timeout, allow_redirects=True)
-            content_type = response.headers.get('content-type', '').lower()
+            # Determine content type from URL and headers
+            content_type_from_url = self._guess_content_type_from_url(url)
             
-            # Check file size
-            content_length = response.headers.get('content-length')
-            if content_length and int(content_length) > self.max_file_size:
-                return WhitepaperContent(
-                    url=url,
-                    content_type='unknown',
-                    title=None,
-                    content='',
-                    word_count=0,
-                    page_count=None,
-                    content_hash='',
-                    extraction_method='none',
-                    success=False,
-                    error_message=f"File too large: {content_length} bytes"
-                )
+            # Try HEAD request to get content type from headers
+            content_type_from_headers = None
+            try:
+                response = self.session.head(url, timeout=self.timeout, allow_redirects=True)
+                content_type_from_headers = response.headers.get('content-type', '').lower()
+                
+                # Check file size
+                content_length = response.headers.get('content-length')
+                if content_length and int(content_length) > self.max_file_size:
+                    return WhitepaperContent(
+                        url=url,
+                        content_type='unknown',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=None,
+                        content_hash='',
+                        extraction_method='none',
+                        success=False,
+                        error_message=f"File too large: {content_length} bytes"
+                    )
+            except Exception as e:
+                logger.debug(f"HEAD request failed for {url}: {e}, using URL-based detection")
             
-            if 'pdf' in content_type:
+            # Decide extraction method based on URL and headers
+            if (content_type_from_url == 'pdf' or 
+                (content_type_from_headers and 'pdf' in content_type_from_headers)):
                 return self._extract_pdf_content(url)
             else:
                 return self._extract_webpage_content(url)
@@ -269,8 +278,23 @@ class WhitepaperScraper:
                 except:
                     pass
                     
-        except Exception as e:
-            logger.error(f"Failed to extract PDF content from {url}: {e}")
+        except requests.exceptions.HTTPError as e:
+            # Handle HTTP errors in PDF extraction
+            if e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 403:
+                    logger.warning(f"Access forbidden to PDF {url} - authentication or permission issue")
+                    error_msg = f"PDF access forbidden (403)"
+                elif status_code == 404:
+                    logger.warning(f"PDF not found (404) at {url}")
+                    error_msg = f"PDF not found (404)"
+                else:
+                    logger.warning(f"HTTP error ({status_code}) accessing PDF {url}: {e}")
+                    error_msg = f"HTTP {status_code} error accessing PDF"
+            else:
+                logger.warning(f"HTTP error accessing PDF {url}: {e}")
+                error_msg = f"HTTP error accessing PDF: {e}"
+            
             return WhitepaperContent(
                 url=url,
                 content_type='pdf',
@@ -281,7 +305,21 @@ class WhitepaperScraper:
                 content_hash='',
                 extraction_method='none',
                 success=False,
-                error_message=str(e)
+                error_message=error_msg
+            )
+        except Exception as e:
+            logger.warning(f"Failed to extract PDF content from {url}: {e}")
+            return WhitepaperContent(
+                url=url,
+                content_type='pdf',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='none',
+                success=False,
+                error_message=f"PDF extraction failed: {str(e)}"
             )
     
     def _extract_with_multiple_methods(self, pdf_path: str) -> tuple[str, str, int]:
@@ -377,6 +415,23 @@ class WhitepaperScraper:
             content = self._clean_webpage_content(content)
             
             word_count = len(content.split())
+            
+            # Check if we got meaningful content
+            if word_count < 20:  # Very little content extracted
+                logger.warning(f"Minimal content extracted from {url}: {word_count} words - likely dynamic content or access restrictions")
+                return WhitepaperContent(
+                    url=url,
+                    content_type='webpage',
+                    title=title,
+                    content=content,
+                    word_count=word_count,
+                    page_count=None,
+                    content_hash='',
+                    extraction_method='beautifulsoup_minimal_content',
+                    success=False,
+                    error_message=f"Insufficient content extracted: {word_count} words (minimum 20 required)"
+                )
+            
             content_hash = hashlib.sha256(content.encode()).hexdigest()
             
             logger.success(f"Extracted webpage content: {word_count} words")
@@ -479,6 +534,30 @@ class WhitepaperScraper:
             # This is likely the title
             return line
         return None
+    
+    def _guess_content_type_from_url(self, url: str) -> str:
+        """Guess content type from URL patterns."""
+        url_lower = url.lower()
+        
+        # Check for PDF file extensions
+        if url_lower.endswith('.pdf') or '/whitepaper.pdf' in url_lower or 'whitepaper' in url_lower and '.pdf' in url_lower:
+            return 'pdf'
+        
+        # Check for known PDF hosting patterns
+        if ('assets.' in url_lower and '.pdf' in url_lower) or \
+           ('github.com' in url_lower and '.pdf' in url_lower) or \
+           ('docs.' in url_lower and 'pdf' in url_lower):
+            return 'pdf'
+        
+        # Check for documentation/wiki sites that are typically webpages
+        if any(pattern in url_lower for pattern in [
+            'gitbook.', 'docs.', 'wiki.', 'documentation.', 'readme.',
+            'github.io', 'notion.', 'confluence.'
+        ]):
+            return 'webpage'
+        
+        # Default to webpage if can't determine
+        return 'webpage'
     
     def _is_google_drive_url(self, url: str) -> bool:
         """Check if URL is a Google Drive file link."""
