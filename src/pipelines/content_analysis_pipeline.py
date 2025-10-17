@@ -1297,6 +1297,20 @@ class ContentAnalysisPipeline:
                 url=whitepaper_link.url,
                 error_message=error_msg
             )
+        elif "google drive" in error_lower or "drive.google.com" in whitepaper_link.url:
+            # Google Drive specific failures - treat as connection errors
+            if "too large" in error_lower:
+                self.whitepaper_status_logger.log_pdf_extraction_failed(
+                    link_id=whitepaper_link.id,
+                    url=whitepaper_link.url,
+                    error_message=f"Google Drive file too large: {error_msg}"
+                )
+            else:
+                self.whitepaper_status_logger.log_connection_error(
+                    link_id=whitepaper_link.id,
+                    url=whitepaper_link.url,
+                    error_message=f"Google Drive access failed: {error_msg}"
+                )
         else:
             # General connection error for unclassified errors
             self.whitepaper_status_logger.log_connection_error(

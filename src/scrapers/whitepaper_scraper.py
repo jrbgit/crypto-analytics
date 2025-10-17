@@ -911,6 +911,21 @@ class WhitepaperScraper:
         try:
             logger.info(f"Processing Google Drive URL: {url}")
             
+            # Set stricter limits for Google Drive to prevent crashes
+            import signal
+            import threading
+            
+            # Create a timeout for the entire operation
+            timeout_occurred = threading.Event()
+            
+            def timeout_handler():
+                timeout_occurred.set()
+                logger.error(f"Google Drive download timed out after 60 seconds: {url}")
+            
+            # Set a 60-second timeout for the entire Google Drive operation
+            timer = threading.Timer(60.0, timeout_handler)
+            timer.start()
+            
             # Extract file ID
             file_id = self._extract_google_drive_file_id(url)
             if not file_id:
@@ -932,8 +947,13 @@ class WhitepaperScraper:
             logger.debug(f"Attempting Google Drive direct download: {download_url}")
             
             try:
+                # Check timeout before starting
+                if timeout_occurred.is_set():
+                    return self._create_timeout_error_response(url)
+                    
                 # Test if it's a PDF by trying to download a small portion
-                response = self.session.get(download_url, timeout=self.timeout, stream=True)
+                logger.debug(f"Testing Google Drive download: {download_url}")
+                response = self.session.get(download_url, timeout=15, stream=True)
                 
                 # Check if we got redirected to a virus scan warning
                 if 'drive.google.com' in response.url and 'virus' in response.url:
@@ -950,7 +970,11 @@ class WhitepaperScraper:
                     if chunk.startswith(b'%PDF'):
                         content_type = 'application/pdf'
                 
-                if 'pdf' in content_type or response.content.startswith(b'%PDF'):
+                # Check if it's a PDF by examining the first chunk
+                pdf_chunk = chunk if 'chunk' in locals() else next(response.iter_content(1024), b'')
+                if 'pdf' in content_type or pdf_chunk.startswith(b'%PDF'):
+                    # Reset the response stream for full download
+                    response.close()
                     # It's a PDF, download and process it
                     return self._extract_google_drive_pdf(download_url, url)
                 else:
@@ -975,21 +999,113 @@ class WhitepaperScraper:
                 success=False,
                 error_message=f"Google Drive processing failed: {e}"
             )
+        finally:
+            # Always cleanup the timer
+            try:
+                timer.cancel()
+            except:
+                pass
     
     def _extract_google_drive_pdf(self, download_url: str, original_url: str) -> WhitepaperContent:
         """Extract PDF content from Google Drive direct download URL."""
         try:
-            # Download PDF to temporary file
-            response = self.session.get(download_url, timeout=self.timeout)
+            # Download PDF to temporary file with increased timeout for large files
+            logger.info(f"Downloading Google Drive PDF from {download_url}")
+            response = self.session.get(download_url, timeout=30, stream=True)
             response.raise_for_status()
             
+            # Check content length
+            content_length = response.headers.get('content-length')
+            if content_length:
+                size_mb = int(content_length) / (1024 * 1024)
+                logger.info(f"PDF size: {size_mb:.1f} MB")
+                
+                # Skip files that are too large (>50MB)
+                if size_mb > 50:
+                    logger.warning(f"PDF file too large ({size_mb:.1f} MB), skipping")
+                    return WhitepaperContent(
+                        url=original_url,
+                        content_type='pdf',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=None,
+                        content_hash='',
+                        extraction_method='google_drive_skipped_large',
+                        success=False,
+                        error_message=f"PDF file too large ({size_mb:.1f} MB)"
+                    )
+            
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
-                tmp_file.write(response.content)
+                # Download in chunks to avoid memory issues
+                downloaded_size = 0
+                max_size = 50 * 1024 * 1024  # 50MB limit
+                
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        # Check timeout during download
+                        if 'timeout_occurred' in locals() and timeout_occurred.is_set():
+                            logger.warning(f"Download timed out at {downloaded_size / (1024*1024):.1f} MB")
+                            return self._create_timeout_error_response(original_url)
+                            
+                        downloaded_size += len(chunk)
+                        if downloaded_size > max_size:
+                            logger.warning(f"File too large ({downloaded_size / (1024*1024):.1f} MB), stopping download")
+                            return WhitepaperContent(
+                                url=original_url,
+                                content_type='pdf',
+                                title=None,
+                                content='',
+                                word_count=0,
+                                page_count=None,
+                                content_hash='',
+                                extraction_method='google_drive_too_large',
+                                success=False,
+                                error_message=f"PDF file too large ({downloaded_size / (1024*1024):.1f} MB)"
+                            )
+                        tmp_file.write(chunk)
+                        
                 tmp_path = tmp_file.name
+                logger.info(f"Downloaded {downloaded_size / (1024*1024):.1f} MB to {tmp_path}")
             
             try:
-                # Try multiple extraction methods
-                content, method, page_count = self._extract_with_multiple_methods(tmp_path)
+                # Add safety checks for Google Drive PDFs
+                import os
+                file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
+                
+                # Skip files that might cause crashes (lowered threshold for Google Drive)
+                if file_size_mb > 20:
+                    logger.warning(f"Skipping PDF extraction for large file ({file_size_mb:.1f} MB): {original_url}")
+                    return WhitepaperContent(
+                        url=original_url,
+                        content_type='pdf',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=None,
+                        content_hash='',
+                        extraction_method='google_drive_skipped_large_file',
+                        success=False,
+                        error_message=f"PDF file too large for extraction ({file_size_mb:.1f} MB)"
+                    )
+                
+                # Try extraction with error handling
+                try:
+                    content, method, page_count = self._extract_with_multiple_methods(tmp_path)
+                except Exception as extraction_error:
+                    logger.error(f"PDF extraction failed for {original_url}: {extraction_error}")
+                    return WhitepaperContent(
+                        url=original_url,
+                        content_type='pdf',
+                        title=None,
+                        content='',
+                        word_count=0,
+                        page_count=None,
+                        content_hash='',
+                        extraction_method='google_drive_extraction_failed',
+                        success=False,
+                        error_message=f"PDF extraction failed: {extraction_error}"
+                    )
                 
                 if not content.strip():
                     return WhitepaperContent(
@@ -1100,6 +1216,22 @@ class WhitepaperScraper:
                 success=False,
                 error_message=f"Google Drive webpage extraction failed: {e}"
             )
+    
+    def _create_timeout_error_response(self, url: str) -> WhitepaperContent:
+        """Create error response for timeout."""
+        return WhitepaperContent(
+            url=url,
+            content_type='unknown',
+            title=None,
+            content='',
+            word_count=0,
+            page_count=None,
+            content_hash='',
+            extraction_method='google_drive_timeout',
+            success=False,
+            error_message="Google Drive download timed out after 60 seconds"
+        )
+    
     
     def _handle_google_drive_large_file(self, file_id: str, original_url: str) -> WhitepaperContent:
         """Handle large Google Drive files that show virus scan warnings."""
