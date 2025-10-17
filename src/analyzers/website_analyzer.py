@@ -624,7 +624,7 @@ Content to analyze:
             
             # Rate limiting between API calls
             if i < len(website_data) - 1:  # Don't sleep after the last item
-                time.sleep(0.5)  # 0.5 seconds between calls
+                time.sleep(0.2)  # 0.2 seconds between calls
         
         successful_analyses = len([r for r in results if r is not None])
         logger.info(f"Batch analysis complete: {successful_analyses}/{len(website_data)} successful")

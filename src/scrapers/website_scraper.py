@@ -78,7 +78,7 @@ class WebsiteAnalysisResult:
 class WebsiteScraper:
     """Intelligent website scraper for cryptocurrency projects."""
     
-    def __init__(self, max_pages: int = 10, max_depth: int = 3, delay: float = 0.5):
+    def __init__(self, max_pages: int = 10, max_depth: int = 3, delay: float = 0.2):
         """
         Initialize the website scraper.
         

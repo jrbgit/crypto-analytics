@@ -101,7 +101,7 @@ class RedditScraper:
     def __init__(self, 
                  recent_days: int = 30,
                  max_posts: int = 100,
-                 rate_limit_delay: float = 0.5):
+                 rate_limit_delay: float = 0.2):
         """
         Initialize the Reddit scraper.
         
