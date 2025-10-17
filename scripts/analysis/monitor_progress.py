@@ -112,9 +112,26 @@ def main():
         
         print(f"  📄 Whitepapers: {whitepaper_analyzed:,}/{whitepaper_total:,} ({whitepaper_pct:.1f}%) - {whitepaper_remaining:,} remaining")
         
+        # YouTube links
+        youtube_total = session.execute(text(
+            "SELECT COUNT(*) FROM project_links WHERE link_type = 'youtube'"
+        )).scalar()
+        
+        youtube_analyzed = session.execute(text("""
+            SELECT COUNT(DISTINCT pl.id) 
+            FROM project_links pl 
+            JOIN link_content_analysis lca ON pl.id = lca.link_id 
+            WHERE pl.link_type = 'youtube'
+        """)).scalar()
+        
+        youtube_remaining = youtube_total - youtube_analyzed
+        youtube_pct = (youtube_analyzed / youtube_total * 100) if youtube_total > 0 else 0
+        
+        print(f"  📺 YouTube: {youtube_analyzed:,}/{youtube_total:,} ({youtube_pct:.1f}%) - {youtube_remaining:,} remaining")
+        
         # Overall totals
-        total_links = website_total + reddit_total + medium_total + whitepaper_total
-        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed
+        total_links = website_total + reddit_total + medium_total + whitepaper_total + youtube_total
+        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed + youtube_analyzed
         total_remaining = total_links - total_analyzed
         overall_pct = (total_analyzed / total_links * 100) if total_links > 0 else 0
         
