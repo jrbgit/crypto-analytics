@@ -29,7 +29,7 @@ crypto-analytics/
 ## Getting Started
 
 1. Install dependencies: `pip install -r requirements.txt`
-2. Set up environment variables (see config/env.example)
+2. Set up environment variables (see config/.env.example)
 3. Initialize database: `python src/models/init_db.py`
 4. Start data collection: `python src/collectors/livecoinwatch.py`
 
