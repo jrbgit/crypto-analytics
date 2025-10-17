@@ -1,0 +1,21 @@
+{
+  "created_at": "2025-10-17T16:39:29.880321",
+  "monthly_limit": 100,
+  "projects_selected": 100,
+  "tier_allocations": {
+    "TIER_1_TOP_MARKET_CAP": 40,
+    "TIER_2_HIGH_QUALITY": 25,
+    "TIER_3_PROMISING": 20,
+    "TIER_4_BUFFER": 15
+  },
+  "priority_projects": [
+    {
+      "project_id": 2,
+      "project_name": "Ethereum",
+      "project_code": "ETH",
+      "twitter_link_id": 6,
+      "twitter_url": "https://x.com/ethereum",
+      "priority_tier": 1,
+      "priority_score": 97.94,
+      "selection_reason": "Large market cap ($1B+)",
+      "market_cap": 

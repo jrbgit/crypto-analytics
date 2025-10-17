@@ -269,7 +269,7 @@ class TwitterPrioritizationStrategy:
                 tier_name = tier.name.replace('_', ' ').title()
                 print(f"\n  {tier_name}:")
                 for i, project in enumerate(tier_projects[:5], 1):
-                    market_cap_str = f"${project.market_cap/1e9:.1f}B" if project.market_cap else "N/A"
+                    market_cap_str = f"${float(project.market_cap)/1e9:.1f}B" if project.market_cap else "N/A"
                     rank_str = f"#{project.rank}" if project.rank else "N/A"
                     print(f"    {i}. {project.project_name} ({project.project_code})")
                     print(f"       Rank: {rank_str} | Market Cap: {market_cap_str} | Score: {project.priority_score:.1f}")
@@ -298,7 +298,7 @@ class TwitterPrioritizationStrategy:
                 'priority_tier': project.priority_tier.value,
                 'priority_score': project.priority_score,
                 'selection_reason': project.selection_reason,
-                'market_cap': project.market_cap,
+                'market_cap': float(project.market_cap) if project.market_cap else None,
                 'rank': project.rank,
                 'has_website_analysis': project.has_website_analysis,
                 'website_quality_score': project.website_quality_score
