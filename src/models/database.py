@@ -106,6 +106,14 @@ class ProjectLink(Base):
     whitepaper_format_detected = Column(String(20))  # pdf, webpage, etc.
     whitepaper_last_successful_extraction = Column(DateTime)
     
+    # Reddit status tracking
+    current_reddit_status = Column(String(50), default='unknown')
+    last_reddit_check = Column(DateTime)
+    reddit_consecutive_failures = Column(Integer, default=0)
+    reddit_inactive_90_days = Column(Boolean, default=False)
+    reddit_subscriber_count = Column(Integer)
+    reddit_last_post_date = Column(DateTime)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -114,6 +122,7 @@ class ProjectLink(Base):
     content_analysis = relationship("LinkContentAnalysis", back_populates="link", cascade="all, delete-orphan")
     status_logs = relationship("WebsiteStatusLog", back_populates="link", cascade="all, delete-orphan")
     whitepaper_status_logs = relationship("WhitepaperStatusLog", back_populates="link", cascade="all, delete-orphan")
+    reddit_status_logs = relationship("RedditStatusLog", back_populates="link", cascade="all, delete-orphan")
 
 
 class ProjectImage(Base):
@@ -405,3 +414,4 @@ class DatabaseManager:
 # This avoids circular import issues
 from .website_status import WebsiteStatusLog
 from .whitepaper_status import WhitepaperStatusLog
+from .reddit_status import RedditStatusLog

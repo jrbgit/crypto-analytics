@@ -37,6 +37,7 @@ from analyzers.website_analyzer import WebsiteContentAnalyzer, WebsiteAnalysis
 from analyzers.whitepaper_analyzer import WhitepaperContentAnalyzer, WhitepaperAnalysis
 from analyzers.medium_analyzer import MediumContentAnalyzer, MediumAnalysis
 from analyzers.reddit_analyzer import RedditContentAnalyzer, RedditAnalysis
+from services.reddit_status_logger import create_reddit_status_logger
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -82,8 +83,9 @@ class ContentAnalysisPipeline:
         """
         self.db_manager = db_manager
         
-        # Initialize website status logger
+        # Initialize status loggers
         self.status_logger = create_status_logger(db_manager)
+        self.reddit_status_logger = create_reddit_status_logger(db_manager)
         
         # Initialize scrapers
         scraper_config = scraper_config or {}
@@ -422,9 +424,34 @@ class ContentAnalysisPipeline:
         scrape_result = self.reddit_scraper.scrape_reddit_community(reddit_link.url)
         
         if not scrape_result.scrape_success:
-            logger.error(f"Reddit scraping failed for {reddit_link.url}: {scrape_result.error_message}")
-            self._update_scrape_status(reddit_link, success=False, error=scrape_result.error_message)
-            return None
+            # Check if this is an inactive community (not an error)
+            if "No recent posts found" in scrape_result.error_message and "within the last" in scrape_result.error_message:
+                # Extract days from error message or use default
+                recent_days = self.reddit_scraper.recent_days
+                
+                # Log as inactive community, not failure
+                self.reddit_status_logger.log_inactive(
+                    link_id=reddit_link.id,
+                    url=reddit_link.url,
+                    recent_days=recent_days,
+                    subscriber_count=scrape_result.subreddit_info.subscribers if scrape_result.subreddit_info else None
+                )
+                
+                # Store basic community information even if inactive
+                analysis_record = self._store_inactive_reddit_community(
+                    reddit_link,
+                    scrape_result
+                )
+                
+                # Update status as processed (not failed)
+                self._update_scrape_status(reddit_link, success=True)
+                logger.info(f"Reddit community inactive for {recent_days} days: {project.name} - stored community info")
+                return analysis_record
+            else:
+                # Real error (private, banned, etc.)
+                logger.error(f"Reddit scraping failed for {reddit_link.url}: {scrape_result.error_message}")
+                self._update_scrape_status(reddit_link, success=False, error=scrape_result.error_message)
+                return None
         
         # Step 2: Analyze with LLM
         reddit_analysis = self.reddit_analyzer.analyze_reddit_community(scrape_result)
@@ -444,7 +471,15 @@ class ContentAnalysisPipeline:
         # Step 4: Update scrape status
         self._update_scrape_status(reddit_link, success=True)
         
-        # Step 5: Log API usage
+        # Step 5: Log successful Reddit analysis
+        self.reddit_status_logger.log_success(
+            link_id=reddit_link.id,
+            url=reddit_link.url,
+            posts_found=len(scrape_result.posts_analyzed),
+            subscriber_count=scrape_result.subreddit_info.subscribers if scrape_result.subreddit_info else None
+        )
+        
+        # Step 6: Log API usage
         self._log_reddit_analysis_usage(reddit_analysis)
         
         logger.success(f"Reddit analysis complete for {project.name}: Community health {reddit_analysis.community_health_score}/10")
@@ -867,6 +902,68 @@ class ContentAnalysisPipeline:
             session.commit()
             
             logger.success(f"Stored Reddit analysis results for {reddit_link.url}")
+            return analysis_record
+    
+    def _store_inactive_reddit_community(self,
+                                        reddit_link: ProjectLink,
+                                        scrape_result: RedditAnalysisResult) -> LinkContentAnalysis:
+        """Store basic information for inactive Reddit communities."""
+        
+        with self.db_manager.get_session() as session:
+            # Create a basic analysis record for inactive community
+            content_hash = hashlib.sha256(f"{scrape_result.subreddit_name}_inactive_{datetime.now(UTC)}".encode()).hexdigest()
+            
+            # Check if we already have an inactive record for this community
+            existing = session.query(LinkContentAnalysis).filter(
+                and_(
+                    LinkContentAnalysis.link_id == reddit_link.id,
+                    LinkContentAnalysis.summary.like('%inactive%')
+                )
+            ).first()
+            
+            if existing:
+                logger.info(f"Inactive community record already exists for {reddit_link.url}")
+                return existing
+            
+            # Create basic inactive community record
+            analysis_record = LinkContentAnalysis(
+                link_id=reddit_link.id,
+                
+                # Content metadata
+                raw_content="No recent activity within analysis period",
+                content_hash=content_hash,
+                page_title=f"r/{scrape_result.subreddit_name} - Inactive Reddit Community",
+                pages_analyzed=0,
+                total_word_count=0,
+                
+                # Document info
+                document_type='reddit_community',
+                extraction_method='reddit_scraper',
+                
+                # Basic scores for inactive community
+                technical_depth_score=0,
+                content_quality_score=0,
+                confidence_score=0.9,  # High confidence that it's inactive
+                
+                # Store inactive status info
+                summary=f"Inactive Reddit community: r/{scrape_result.subreddit_name} - No posts within analysis period. {scrape_result.subreddit_info.subscribers:,} subscribers." if scrape_result.subreddit_info else f"Inactive Reddit community: r/{scrape_result.subreddit_name} - No recent activity.",
+                technical_summary="Community appears inactive - no recent posts to analyze",
+                key_points=[
+                    "Community status: Inactive (no recent posts)",
+                    f"Subscriber count: {scrape_result.subreddit_info.subscribers:,}" if scrape_result.subreddit_info else "Subscriber count: Unknown",
+                    "Analysis period: No qualifying content found",
+                    "Recommendation: Monitor for future activity"
+                ],
+                
+                # Analysis metadata
+                model_used='n/a',
+                analysis_version='2.3'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            
+            logger.info(f"Stored inactive Reddit community record for {reddit_link.url}")
             return analysis_record
     
     def _log_reddit_analysis_usage(self, reddit_analysis: RedditAnalysis):
