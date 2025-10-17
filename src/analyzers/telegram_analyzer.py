@@ -318,6 +318,77 @@ class TelegramContentAnalyzer:
             logger.error(f"Error storing Telegram analysis: {e}")
             return False
     
+    def store_error_result(self, link_id: int, telegram_url: str, error_code: int, error_message: str) -> bool:
+        """
+        Store error information when Telegram analysis fails due to API errors.
+        
+        Args:
+            link_id: Database ID of the project link
+            telegram_url: Telegram URL that failed
+            error_code: HTTP error code from Telegram API
+            error_message: Error message from Telegram API
+            
+        Returns:
+            True if stored successfully, False otherwise
+        """
+        
+        try:
+            with self.db_manager.get_session() as session:
+                # Check if analysis already exists
+                existing_analysis = session.query(LinkContentAnalysis).filter_by(link_id=link_id).first()
+                
+                if existing_analysis:
+                    logger.info(f"Updating existing Telegram error record for link ID {link_id}")
+                    content_analysis = existing_analysis
+                else:
+                    logger.info(f"Creating new Telegram error record for link ID {link_id}")
+                    content_analysis = LinkContentAnalysis(link_id=link_id)
+                    session.add(content_analysis)
+                
+                # Store error information
+                error_data = {
+                    'error': True,
+                    'error_code': error_code,
+                    'error_message': error_message,
+                    'telegram_url': telegram_url,
+                    'analysis_timestamp': datetime.now(timezone.utc).isoformat()
+                }
+                
+                content_analysis.raw_content = json.dumps(error_data, indent=2)
+                content_analysis.content_hash = hashlib.sha256(
+                    f"error_{error_code}_{telegram_url}_{int(time.time())}".encode()
+                ).hexdigest()
+                content_analysis.pages_analyzed = 0
+                content_analysis.total_word_count = 0
+                
+                # Mark as error in various fields
+                content_analysis.red_flags = [f"Telegram API Error {error_code}: {error_message}"]
+                content_analysis.development_stage = f"API_ERROR_{error_code}"
+                content_analysis.technical_depth_score = 0.0
+                content_analysis.content_quality_score = 0.0
+                content_analysis.confidence_score = 0.0
+                
+                # Store error details in roadmap_items
+                content_analysis.roadmap_items = [
+                    f"Error Code: {error_code}",
+                    f"Error Message: {error_message}",
+                    f"Failed URL: {telegram_url}",
+                    f"Analysis Date: {datetime.now(timezone.utc).isoformat()}",
+                    "Status: Analysis Failed - Channel Not Found or Inaccessible"
+                ]
+                
+                content_analysis.created_at = datetime.now(timezone.utc)
+                content_analysis.updated_at = datetime.now(timezone.utc)
+                
+                session.commit()
+                
+                logger.info(f"Telegram error record stored successfully for link ID {link_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error storing Telegram error record: {e}")
+            return False
+    
     def analyze_and_store(self, link_id: int, telegram_url: str, 
                          project_name: str = None) -> bool:
         """
@@ -334,32 +405,67 @@ class TelegramContentAnalyzer:
         
         logger.info(f"Starting complete Telegram analysis workflow for link ID {link_id}")
         
+        # Check if we can make API requests
+        can_proceed, message = self.api_client.can_make_request()
+        if not can_proceed:
+            logger.error(f"Cannot proceed with Telegram analysis: {message}")
+            # Store rate limit error
+            self.store_error_result(link_id, telegram_url, 429, f"Rate limit exceeded: {message}")
+            self._update_link_status(link_id, False, "Rate limit exceeded")
+            return True  # Return True to continue batch processing
+        
+        # Extract channel ID from URL for error tracking
+        channel_id = self.api_client.extract_channel_id_from_url(telegram_url)
+        if not channel_id:
+            logger.error(f"Could not extract channel ID from Telegram URL: {telegram_url}")
+            self.store_error_result(link_id, telegram_url, 400, "Invalid Telegram URL format")
+            self._update_link_status(link_id, False, "Invalid URL format")
+            return True  # Return True to continue batch processing
+        
         # Perform analysis
         analysis = self.analyze_telegram_link(link_id, telegram_url, project_name)
         if not analysis:
-            logger.error(f"Telegram analysis failed for link ID {link_id}")
-            return False
+            # Analysis failed - this is likely a 400 "chat not found" error
+            # Store error result without making additional API calls
+            logger.info(f"Channel @{channel_id} analysis failed - likely not found or inaccessible")
+            self.store_error_result(link_id, telegram_url, 400, "Chat not found - channel may be private, deleted, or username incorrect")
+            self._update_link_status(link_id, False, "Channel not found")
+            return True  # Return True to continue batch processing
         
         # Store results
         if not self.store_analysis_result(link_id, analysis):
             logger.error(f"Failed to store Telegram analysis results for link ID {link_id}")
             return False
         
-        # Update the project link to mark it as analyzed
+        # Update the project link to mark it as analyzed successfully
+        self._update_link_status(link_id, True, "Analysis completed successfully")
+        
+        logger.success(f"Complete Telegram analysis workflow finished for link ID {link_id}")
+        return True
+    
+    def _update_link_status(self, link_id: int, success: bool, status_message: str = None):
+        """
+        Update the project link status after analysis.
+        
+        Args:
+            link_id: Database ID of the project link
+            success: Whether the analysis was successful
+            status_message: Optional status message
+        """
         try:
             with self.db_manager.get_session() as session:
                 link = session.query(ProjectLink).filter_by(id=link_id).first()
                 if link:
                     link.needs_analysis = False
                     link.last_scraped = datetime.now(timezone.utc)
-                    link.scrape_success = True
+                    link.scrape_success = success
+                    if status_message:
+                        # Store status in a field if available, or just log it
+                        pass
                     session.commit()
-                    logger.info(f"Updated project link {link_id} status")
+                    logger.info(f"Updated project link {link_id} status: {'success' if success else 'failed'}")
         except Exception as e:
             logger.warning(f"Could not update project link status: {e}")
-        
-        logger.success(f"Complete Telegram analysis workflow finished for link ID {link_id}")
-        return True
     
     def get_usage_stats(self) -> Dict[str, Any]:
         """Get current API usage statistics."""
@@ -400,7 +506,7 @@ def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str,
             'stats': initial_stats
         }
     
-    # Find Telegram links that need analysis
+    # Find Telegram links that need analysis (excluding those already processed or errored)
     with db_manager.get_session() as session:
         telegram_links = session.execute(text("""
             SELECT 
