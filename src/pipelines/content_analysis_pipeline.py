@@ -30,6 +30,7 @@ from sqlalchemy import and_, or_, select
 from models.database import DatabaseManager, CryptoProject, ProjectLink, LinkContentAnalysis, APIUsage
 from scrapers.website_scraper import WebsiteScraper, WebsiteAnalysisResult
 from services.website_status_logger import create_status_logger
+from services.whitepaper_status_logger import create_whitepaper_status_logger
 from scrapers.whitepaper_scraper import WhitepaperScraper, WhitepaperContent
 from scrapers.medium_scraper import MediumScraper, MediumAnalysisResult
 from scrapers.reddit_scraper import RedditScraper, RedditAnalysisResult
@@ -85,6 +86,7 @@ class ContentAnalysisPipeline:
         
         # Initialize status loggers
         self.status_logger = create_status_logger(db_manager)
+        self.whitepaper_status_logger = create_whitepaper_status_logger(db_manager)
         self.reddit_status_logger = create_reddit_status_logger(db_manager)
         
         # Initialize scrapers
@@ -338,17 +340,8 @@ class ContentAnalysisPipeline:
         if not scrape_result.success:
             error_msg = scrape_result.error_message or "Unknown scraping error"
             
-            # Categorize scraping errors for better logging
-            if "404" in error_msg or "not found" in error_msg.lower():
-                logger.warning(f"Whitepaper not found (404) for {whitepaper_link.url} - website issue")
-            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                logger.warning(f"Connection timeout for whitepaper {whitepaper_link.url}")
-            elif "dns_resolution" in error_msg.lower():
-                logger.warning(f"DNS resolution failed for whitepaper {whitepaper_link.url}")
-            elif "ssl" in error_msg.lower() or "certificate" in error_msg.lower():
-                logger.warning(f"SSL certificate error for whitepaper {whitepaper_link.url}")
-            else:
-                logger.error(f"Whitepaper scraping failed for {whitepaper_link.url}: {error_msg}")
+            # Log detailed error status to database with quiet console logging
+            self._log_whitepaper_error(whitepaper_link, error_msg, scrape_result)
                 
             self._update_scrape_status(whitepaper_link, success=False, error=error_msg)
             return None
@@ -448,10 +441,29 @@ class ContentAnalysisPipeline:
                 logger.info(f"Reddit community inactive for {recent_days} days: {project.name} - stored community info")
                 return analysis_record
             else:
-                # Real error (private, banned, etc.)
-                logger.error(f"Reddit scraping failed for {reddit_link.url}: {scrape_result.error_message}")
-                self._update_scrape_status(reddit_link, success=False, error=scrape_result.error_message)
-                return None
+                # Check if this is an expected failure that should be handled gracefully
+                error_msg = scrape_result.error_message
+                error_lower = error_msg.lower()
+                
+                # Expected failures that should be logged to database, not as errors
+                expected_failures = [
+                    'does not exist', '404', 'not found', 'private', 'restricted', 
+                    'banned', 'quarantined', 'forbidden', '403'
+                ]
+                
+                if any(condition in error_lower for condition in expected_failures):
+                    # This is an expected failure - log to status logger and store in database
+                    self._log_reddit_expected_failure(reddit_link, scrape_result)
+                    
+                    # Update status as processed (not failed) since we handled it gracefully
+                    self._update_scrape_status(reddit_link, success=True, error=None)
+                    logger.info(f"Reddit community unavailable: {project.name} - {error_msg} (stored in database)")
+                    return self._create_reddit_unavailable_record(reddit_link, scrape_result)
+                else:
+                    # Unexpected error (API issues, network problems, etc.)
+                    logger.error(f"Reddit scraping failed for {reddit_link.url}: {error_msg}")
+                    self._update_scrape_status(reddit_link, success=False, error=error_msg)
+                    return None
         
         # Step 2: Analyze with LLM
         reddit_analysis = self.reddit_analyzer.analyze_reddit_community(scrape_result)
@@ -984,6 +996,136 @@ class ContentAnalysisPipeline:
             session.add(usage)
             session.commit()
     
+    def _log_whitepaper_error(self, whitepaper_link: ProjectLink, error_msg: str, scrape_result: WhitepaperContent):
+        """Log whitepaper errors to database with appropriate categorization."""
+        error_lower = error_msg.lower()
+        
+        if "404" in error_msg or "not found" in error_lower:
+            self.whitepaper_status_logger.log_not_found(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                error_details=error_msg
+            )
+        elif "403" in error_msg or "access forbidden" in error_lower:
+            self.whitepaper_status_logger.log_access_denied(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                http_status_code=403,
+                error_details=error_msg
+            )
+        elif "429" in error_msg or "rate limit" in error_lower:
+            self.whitepaper_status_logger.log_access_denied(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                http_status_code=429,
+                error_details=error_msg
+            )
+        elif "400" in error_msg or "bad request" in error_lower:
+            self.whitepaper_status_logger.log_access_denied(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                http_status_code=400,
+                error_details=error_msg
+            )
+        elif "insufficient content" in error_lower and hasattr(scrape_result, 'word_count'):
+            self.whitepaper_status_logger.log_insufficient_content(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                word_count=scrape_result.word_count,
+                document_type=getattr(scrape_result, 'content_type', 'unknown'),
+                extraction_method=getattr(scrape_result, 'extraction_method', None)
+            )
+        elif "timeout" in error_lower or "connection" in error_lower or "dns" in error_lower or "ssl" in error_lower:
+            self.whitepaper_status_logger.log_connection_error(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                error_message=error_msg
+            )
+        elif "pdf" in error_lower and ("extraction" in error_lower or "password" in error_lower or "corrupted" in error_lower):
+            self.whitepaper_status_logger.log_pdf_extraction_failed(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                error_message=error_msg
+            )
+        else:
+            # General connection error for unclassified errors
+            self.whitepaper_status_logger.log_connection_error(
+                link_id=whitepaper_link.id,
+                url=whitepaper_link.url,
+                error_message=error_msg
+            )
+    
+    def _log_reddit_expected_failure(self, reddit_link: ProjectLink, scrape_result):
+        """Log expected Reddit failures to the status logger."""
+        error_msg = scrape_result.error_message
+        error_lower = error_msg.lower()
+        
+        if 'does not exist' in error_lower or '404' in error_lower or 'not found' in error_lower:
+            self.reddit_status_logger.log_not_found(
+                link_id=reddit_link.id,
+                url=reddit_link.url,
+                subreddit_name=getattr(scrape_result, 'subreddit_name', 'unknown'),
+                error_details=error_msg
+            )
+        elif 'private' in error_lower or 'restricted' in error_lower or '403' in error_lower:
+            self.reddit_status_logger.log_access_denied(
+                link_id=reddit_link.id,
+                url=reddit_link.url,
+                subreddit_name=getattr(scrape_result, 'subreddit_name', 'unknown'),
+                http_status_code=403,
+                error_details=error_msg
+            )
+        elif 'banned' in error_lower or 'quarantined' in error_lower:
+            self.reddit_status_logger.log_community_unavailable(
+                link_id=reddit_link.id,
+                url=reddit_link.url,
+                subreddit_name=getattr(scrape_result, 'subreddit_name', 'unknown'),
+                reason=error_msg
+            )
+        else:
+            # Default to access denied for other expected failures
+            self.reddit_status_logger.log_access_denied(
+                link_id=reddit_link.id,
+                url=reddit_link.url,
+                subreddit_name=getattr(scrape_result, 'subreddit_name', 'unknown'),
+                http_status_code=0,
+                error_details=error_msg
+            )
+    
+    def _create_reddit_unavailable_record(self, reddit_link: ProjectLink, scrape_result) -> LinkContentAnalysis:
+        """Create a basic record for unavailable Reddit communities."""
+        with self.db_manager.get_session() as session:
+            # Create a minimal analysis record to mark this as processed
+            analysis_record = LinkContentAnalysis(
+                link_id=reddit_link.id,
+                
+                # Minimal content info
+                raw_content=f"Reddit community unavailable: {scrape_result.error_message}",
+                content_hash=hashlib.sha256(scrape_result.error_message.encode()).hexdigest()[:64],
+                page_title=f"r/{getattr(scrape_result, 'subreddit_name', 'unknown')}",
+                pages_analyzed=0,
+                total_word_count=0,
+                
+                # Document info
+                document_type='reddit',
+                extraction_method='reddit_scraper',
+                
+                # Use existing fields to indicate unavailability
+                summary=f"Community unavailable: {scrape_result.error_message}",
+                confidence_score=0.0,  # Zero confidence indicates unavailable
+                technical_depth_score=0,
+                content_quality_score=0,
+                
+                # Timestamps
+                created_at=datetime.now(UTC)
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            session.refresh(analysis_record)
+            
+            return analysis_record
+    
     def _update_scrape_status(self, link: ProjectLink, success: bool, error: str = None):
         """Update the scrape status for a project link with reduced log noise."""
         with self.db_manager.get_session() as session:
@@ -992,15 +1134,20 @@ class ContentAnalysisPipeline:
             link_obj.scrape_success = success
             link_obj.needs_analysis = False  # Mark as processed
             
-            # Reduced logging - status is now logged by website_status_logger
+            # Reduced logging - status is now logged by specialized status loggers
             if success:
                 logger.debug(f"Successfully processed {link_obj.url}")
             else:
-                # Only log actual errors, not expected conditions like robots.txt or parked domains
+                # Only log actual errors, not expected conditions like 404, 403, robots.txt, etc.
                 error_lower = (error or '').lower()
-                if any(condition in error_lower for condition in 
-                      ['robots.txt', 'parked', 'for-sale', 'no pages could be scraped']):
-                    logger.debug(f"Processed {link_obj.url}: {error}")
+                expected_failures = [
+                    '404', '403', '429', '400', 'not found', 'access forbidden', 
+                    'robots.txt', 'parked', 'for-sale', 'no pages could be scraped',
+                    'insufficient content', 'rate limit', 'minimal content',
+                    'does not exist', 'private', 'restricted', 'banned', 'quarantined'
+                ]
+                if any(condition in error_lower for condition in expected_failures):
+                    logger.debug(f"Expected failure for {link_obj.url}: {error}")
                 else:
                     logger.warning(f"Processing failed for {link_obj.url}: {error}")
             

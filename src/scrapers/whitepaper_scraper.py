@@ -480,20 +480,26 @@ class WhitepaperScraper:
                     pass
                     
         except requests.exceptions.HTTPError as e:
-            # Handle HTTP errors in PDF extraction
+            # Handle HTTP errors in PDF extraction - quiet logging for expected failures
             if e.response is not None:
                 status_code = e.response.status_code
                 if status_code == 403:
-                    logger.warning(f"Access forbidden to PDF {url} - authentication or permission issue")
+                    logger.debug(f"Access forbidden to PDF {url} - authentication or permission issue")
                     error_msg = f"PDF access forbidden (403)"
                 elif status_code == 404:
-                    logger.warning(f"PDF not found (404) at {url}")
+                    logger.debug(f"PDF not found (404) at {url}")
                     error_msg = f"PDF not found (404)"
+                elif status_code == 429:
+                    logger.debug(f"Rate limited accessing PDF {url}")
+                    error_msg = f"HTTP 429 rate limit error accessing PDF"
+                elif status_code == 400:
+                    logger.debug(f"Bad request for PDF {url}")
+                    error_msg = f"HTTP 400 bad request error accessing PDF"
                 else:
-                    logger.warning(f"HTTP error ({status_code}) accessing PDF {url}: {e}")
+                    logger.debug(f"HTTP error ({status_code}) accessing PDF {url}: {e}")
                     error_msg = f"HTTP {status_code} error accessing PDF"
             else:
-                logger.warning(f"HTTP error accessing PDF {url}: {e}")
+                logger.debug(f"HTTP error accessing PDF {url}: {e}")
                 error_msg = f"HTTP error accessing PDF: {e}"
             
             return WhitepaperContent(
@@ -724,7 +730,7 @@ class WhitepaperScraper:
             
             # Check if we got meaningful content
             if word_count < 20:  # Very little content extracted
-                logger.warning(f"Minimal content extracted from {url}: {word_count} words - likely dynamic content or access restrictions")
+                logger.debug(f"Minimal content extracted from {url}: {word_count} words - likely dynamic content or access restrictions")
                 return WhitepaperContent(
                     url=url,
                     content_type='webpage',
@@ -754,8 +760,28 @@ class WhitepaperScraper:
                 success=True
             )
             
+        except requests.exceptions.HTTPError as http_e:
+            # Handle HTTP errors quietly - these are expected failures
+            status_code = getattr(http_e.response, 'status_code', 0) if http_e.response else 0
+            if status_code in [400, 403, 404, 429]:
+                logger.debug(f"HTTP {status_code} error for webpage {url}: {http_e}")
+            else:
+                logger.warning(f"HTTP error extracting webpage content from {url}: {http_e}")
+            
+            return WhitepaperContent(
+                url=url,
+                content_type='webpage',
+                title=None,
+                content='',
+                word_count=0,
+                page_count=None,
+                content_hash='',
+                extraction_method='beautifulsoup_failed',
+                success=False,
+                error_message=f"Webpage extraction failed: {http_e}"
+            )
         except Exception as e:
-            logger.error(f"Failed to extract webpage content from {url}: {e}")
+            logger.warning(f"Failed to extract webpage content from {url}: {e}")
             return WhitepaperContent(
                 url=url,
                 content_type='webpage',
