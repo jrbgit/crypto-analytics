@@ -147,14 +147,16 @@ class TelegramAnalysisMetrics:
             score += 1.5
         
         # Channel type appropriateness
-        channel_type = channel_data.get('type', '').lower()
+        channel_type = channel_data.get('type', '') or ''
+        channel_type = channel_type.lower()
         if channel_type == 'channel':
             score += 1.0  # Broadcast channels are good for projects
         elif channel_type == 'supergroup':
             score += 0.5  # Supergroups can be legitimate
         
         # Description quality
-        description = channel_data.get('description', '').lower()
+        description = channel_data.get('description', '') or ''
+        description = description.lower()
         if description:
             # Official indicators
             if any(word in description for word in ['official', 'team', 'announcement']):
@@ -219,7 +221,8 @@ class TelegramAnalysisMetrics:
             base_score = 1.0
         
         # Channel type modifier
-        channel_type = channel_data.get('type', '').lower()
+        channel_type = channel_data.get('type', '') or ''
+        channel_type = channel_type.lower()
         if channel_type == 'channel':
             # Channels are good for broadcasting
             return min(10.0, base_score)
@@ -234,8 +237,10 @@ class TelegramAnalysisMetrics:
         
         score = 5.0  # Base score
         
-        title = channel_data.get('title', '').lower()
-        description = channel_data.get('description', '').lower()
+        title = channel_data.get('title', '') or ''
+        title = title.lower()
+        description = channel_data.get('description', '') or ''
+        description = description.lower()
         
         # Title quality
         if title:
@@ -272,7 +277,8 @@ class TelegramAnalysisMetrics:
                 score += 0.5
         
         # Username professionalism
-        username = channel_data.get('username', '').lower()
+        username = channel_data.get('username', '') or ''
+        username = username.lower()
         if username:
             # Clean, professional username
             if re.match(r'^[a-z][a-z0-9_]*$', username):
@@ -305,7 +311,8 @@ class TelegramAnalysisMetrics:
             score += 0.5
         
         # Channel type affects activity expectations
-        channel_type = channel_data.get('type', '').lower()
+        channel_type = channel_data.get('type', '') or ''
+        channel_type = channel_type.lower()
         if channel_type == 'channel':
             # Channels are for broadcasting, less interactive
             score += 0.5
@@ -392,8 +399,10 @@ class TelegramAnalysisMetrics:
         
         red_flags = []
         
-        title = channel_data.get('title', '').lower()
-        description = channel_data.get('description', '').lower()
+        title = channel_data.get('title', '') or ''
+        title = title.lower()
+        description = channel_data.get('description', '') or ''
+        description = description.lower()
         member_count = channel_data.get('member_count', 0)
         
         # Member count red flags
@@ -435,10 +444,13 @@ class TelegramAnalysisMetrics:
         
         positive_indicators = []
         
-        title = channel_data.get('title', '').lower()
-        description = channel_data.get('description', '').lower()
+        title = channel_data.get('title', '') or ''
+        title = title.lower()
+        description = channel_data.get('description', '') or ''
+        description = description.lower()
         member_count = channel_data.get('member_count', 0)
-        channel_type = channel_data.get('type', '').lower()
+        channel_type = channel_data.get('type', '') or ''
+        channel_type = channel_type.lower()
         
         # Member count positives
         if member_count >= 50000:
