@@ -1,0 +1,15 @@
+{
+  "started_at": "2025-10-17T00:35:23.472142+00:00",
+  "interrupted_at": null,
+  "current_content_type": "website",
+  "completed_content_types": [],
+  "total_stats": {
+    "successful_analyses": 0,
+    "failed_analyses": 0,
+    "projects_found": 0
+  },
+  "current_batch_stats": null,
+  "force_quit": false,
+  "saved_at": "2025-10-17T00:36:07.500148+00:00",
+  "resumed": true
+}
