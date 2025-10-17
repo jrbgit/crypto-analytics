@@ -130,3 +130,7 @@ data/*.json
 config/.env
 logs/
 *.log
+
+# Runtime state files
+analysis_state.json
+error_report.json
