@@ -146,9 +146,26 @@ def main():
         
         print(f"  🐦 Twitter: {twitter_analyzed:,}/{twitter_total:,} ({twitter_pct:.1f}%) - {twitter_remaining:,} remaining")
         
+        # Telegram links
+        telegram_total = session.execute(text(
+            "SELECT COUNT(*) FROM project_links WHERE link_type = 'telegram'"
+        )).scalar()
+        
+        telegram_analyzed = session.execute(text("""
+            SELECT COUNT(DISTINCT pl.id) 
+            FROM project_links pl 
+            JOIN link_content_analysis lca ON pl.id = lca.link_id 
+            WHERE pl.link_type = 'telegram'
+        """)).scalar()
+        
+        telegram_remaining = telegram_total - telegram_analyzed
+        telegram_pct = (telegram_analyzed / telegram_total * 100) if telegram_total > 0 else 0
+        
+        print(f"  📱 Telegram: {telegram_analyzed:,}/{telegram_total:,} ({telegram_pct:.1f}%) - {telegram_remaining:,} remaining")
+        
         # Overall totals
-        total_links = website_total + reddit_total + medium_total + whitepaper_total + youtube_total + twitter_total
-        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed + youtube_analyzed + twitter_analyzed
+        total_links = website_total + reddit_total + medium_total + whitepaper_total + youtube_total + twitter_total + telegram_total
+        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed + youtube_analyzed + twitter_analyzed + telegram_analyzed
         total_remaining = total_links - total_analyzed
         overall_pct = (total_analyzed / total_links * 100) if total_links > 0 else 0
         
@@ -276,6 +293,74 @@ def main():
         else:
             print(f"  🚨 No Twitter API usage detected - Twitter analysis may not be active")
             print(f"  📝 Tip: Run Twitter batch analysis to start analyzing accounts")
+        
+        # Telegram API Usage Monitoring (if Telegram analysis available)
+        print()
+        print("📱 Telegram Bot API Usage & Analysis Insights:")
+        
+        # Check for Telegram API usage in the last 30 days
+        telegram_api_usage = session.execute(text("""
+            SELECT COUNT(*) as api_calls_used
+            FROM api_usage 
+            WHERE api_provider = 'telegram' 
+                AND request_timestamp > NOW() - INTERVAL '30 days'
+                AND response_status = 200
+        """)).scalar()
+        
+        if telegram_api_usage:
+            print(f"  🔍 API Calls Used (Last 30 days): {telegram_api_usage} calls")
+            print(f"  📊 Rate Limit: Conservative 20 calls/minute for channel analysis")
+            
+            # Telegram analysis quality insights
+            telegram_quality = session.execute(text("""
+                SELECT 
+                    AVG(CAST(lca.technical_depth_score AS REAL)) as avg_authenticity,
+                    AVG(CAST(lca.content_quality_score AS REAL)) as avg_content,
+                    COUNT(*) as total_analyzed
+                FROM link_content_analysis lca
+                JOIN project_links pl ON lca.link_id = pl.id
+                WHERE pl.link_type = 'telegram'
+                    AND lca.confidence_score IS NOT NULL
+            """)).fetchone()
+            
+            if telegram_quality and telegram_quality[2] > 0:
+                avg_auth, avg_content, total = telegram_quality
+                print(f"  🎆 Analysis Quality: {total} channels analyzed")
+                print(f"      • Avg Authenticity Score: {avg_auth:.1f}/10")
+                print(f"      • Avg Content Score: {avg_content:.1f}/10")
+            
+            # High priority Telegram channels analyzed
+            high_priority_telegram = session.execute(text("""
+                SELECT COUNT(*)
+                FROM link_content_analysis lca
+                JOIN project_links pl ON lca.link_id = pl.id
+                JOIN crypto_projects cp ON pl.project_id = cp.id
+                WHERE pl.link_type = 'telegram'
+                    AND (cp.rank <= 100 OR cp.market_cap > 1000000000)
+            """)).scalar()
+            
+            if high_priority_telegram:
+                print(f"  🏆 High Priority Channels Analyzed: {high_priority_telegram} (Top 100 or $1B+ market cap)")
+            
+            # Channel health insights
+            telegram_health_stats = session.execute(text("""
+                SELECT 
+                    COUNT(CASE WHEN lca.development_stage = 'excellent' THEN 1 END) as excellent,
+                    COUNT(CASE WHEN lca.development_stage = 'good' THEN 1 END) as good,
+                    COUNT(CASE WHEN lca.development_stage = 'suspicious' THEN 1 END) as suspicious
+                FROM link_content_analysis lca
+                JOIN project_links pl ON lca.link_id = pl.id
+                WHERE pl.link_type = 'telegram'
+                    AND lca.development_stage IS NOT NULL
+            """)).fetchone()
+            
+            if telegram_health_stats:
+                excellent, good, suspicious = telegram_health_stats
+                if excellent or good or suspicious:
+                    print(f"  🏥 Channel Health: {excellent} excellent, {good} good, {suspicious} suspicious")
+        else:
+            print(f"  🚨 No Telegram API usage detected - Telegram analysis may not be active")
+            print(f"  📝 Tip: Set up TELEGRAM_BOT_TOKEN and run Telegram batch analysis")
 
 if __name__ == "__main__":
     main()
