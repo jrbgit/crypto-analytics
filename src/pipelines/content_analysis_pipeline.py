@@ -98,12 +98,12 @@ class ContentAnalysisPipeline:
             timeout=scraper_config.get('timeout', 30),
             max_file_size=scraper_config.get('max_file_size', 50 * 1024 * 1024)
         )
-            self.medium_scraper = MediumScraper(
+        self.medium_scraper = MediumScraper(
             max_articles=scraper_config.get('max_articles', 20),
             recent_days=scraper_config.get('recent_days', 90),
             delay=scraper_config.get('delay', 1.0)
         )
-            self.reddit_scraper = RedditScraper(
+        self.reddit_scraper = RedditScraper(
             recent_days=scraper_config.get('recent_days', 30),
             max_posts=scraper_config.get('max_posts', 100),
             rate_limit_delay=scraper_config.get('delay', 0.2)
