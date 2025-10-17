@@ -6,20 +6,22 @@ Test script for Reddit analysis pipeline - processes a small batch of projects
 import sys
 import os
 from pathlib import Path
-sys.path.append('src')
 
-# Add the parent directory to path for imports
-sys.path.append(str(Path(__file__).parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from scripts.path_utils import setup_project_paths, get_config_path
 
-from src.database.db_manager import DatabaseManager
+# Set up project paths
+project_root = setup_project_paths()
+
+from src.models.database import DatabaseManager
 from src.pipelines.content_analysis_pipeline import ContentAnalysisPipeline
 from dotenv import load_dotenv
 from loguru import logger
 
 def main():
     # Load environment variables
-    config_path = Path('config/env')
-    load_dotenv(config_path)
+    load_dotenv(get_config_path() / ".env")
     
     # Initialize database
     database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')

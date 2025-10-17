@@ -10,9 +10,15 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from scripts.path_utils import setup_project_paths, get_config_path
+
+# Set up project paths
+project_root = setup_project_paths()
+
 # Load environment variables
-config_path = Path(__file__).parent / "config" / "env"
-load_dotenv(config_path, override=True)
+load_dotenv(get_config_path() / ".env", override=True)
 
 def verify_postgresql_connection():
     """Verify connection to PostgreSQL and check data."""

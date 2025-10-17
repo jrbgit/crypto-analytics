@@ -15,14 +15,18 @@ from pathlib import Path
 import hashlib
 from dataclasses import dataclass
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from scripts.path_utils import setup_project_paths, get_config_path, get_data_path
+
+# Set up project paths
+project_root = setup_project_paths()
 
 from dotenv import load_dotenv
 from loguru import logger
 
 # Load environment variables
-load_dotenv()
+load_dotenv(get_config_path() / ".env")
 
 
 @dataclass
@@ -52,9 +56,9 @@ class DataMigrator:
     """Handles SQLite to PostgreSQL data migration with integrity checks"""
     
     def __init__(self, 
-                 sqlite_path: str = "data/crypto_analytics.db",
+                 sqlite_path: str = None,
                  postgres_config: Dict[str, str] = None):
-        self.sqlite_path = sqlite_path
+        self.sqlite_path = sqlite_path or str(get_data_path() / "crypto_analytics.db")
         self.postgres_config = postgres_config or {
             'host': 'localhost',
             'port': '5432',

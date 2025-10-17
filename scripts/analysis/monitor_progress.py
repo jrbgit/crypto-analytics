@@ -12,15 +12,18 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from scripts.path_utils import setup_project_paths, get_config_path
+
+# Set up project paths
+project_root = setup_project_paths()
 
 from src.models.database import DatabaseManager
 from dotenv import load_dotenv
 from sqlalchemy import text
 
 # Load environment variables
-config_path = Path(__file__).parent / "config" / "env"
-load_dotenv(config_path)
+load_dotenv(get_config_path() / ".env")
 
 def main():
     """Monitor analysis progress across all content types."""

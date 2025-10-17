@@ -9,9 +9,14 @@ from pathlib import Path
 import sqlite3
 from collections import Counter, defaultdict
 
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from scripts.path_utils import setup_project_paths, get_data_path
 
-from utils.url_filter import url_filter
+# Set up project paths
+project_root = setup_project_paths()
+
+from src.utils.url_filter import url_filter
 
 def analyze_database_urls():
     """Analyze URLs in the database to see filtering impact."""
@@ -20,7 +25,7 @@ def analyze_database_urls():
     print("=" * 60)
     
     # Connect to database
-    db_path = Path(__file__).parent / 'data' / 'crypto_analytics.db'
+    db_path = get_data_path() / 'crypto_analytics.db'
     if not db_path.exists():
         print(f"❌ Database not found at {db_path}")
         return
