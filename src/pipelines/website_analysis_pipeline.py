@@ -340,7 +340,7 @@ class WebsiteAnalysisPipeline:
             
             # Rate limiting between projects
             if i < len(projects_to_analyze) - 1:
-                time.sleep(2)  # 2 seconds between projects
+                time.sleep(1)  # 1 second between projects
         
         # Summary
         stats = {

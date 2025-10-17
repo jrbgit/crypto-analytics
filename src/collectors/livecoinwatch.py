@@ -88,8 +88,8 @@ class LiveCoinWatchClient:
     
     def _wait_for_rate_limit(self):
         """Wait if necessary to respect rate limits."""
-        # Simple rate limiting - wait 5 seconds between requests
-        time.sleep(5)
+        # Simple rate limiting - wait 2 seconds between requests
+        time.sleep(2)
     
     def _make_request(self, endpoint: str, payload: Dict) -> Optional[Dict]:
         """Make a request to the API with error handling and logging."""
@@ -126,7 +126,7 @@ class LiveCoinWatchClient:
                 return response.json()
             elif response.status_code == 429:
                 logger.warning("Rate limit hit, backing off")
-                time.sleep(300)  # Wait 5 minutes
+                time.sleep(120)  # Wait 2 minutes
                 return None
             else:
                 logger.error(f"API request failed: {response.status_code} - {response.text}")
@@ -318,7 +318,7 @@ class LiveCoinWatchClient:
             logger.success(f"Updated project: {project.name}")
             
             # Small sleep after database commit to reduce load
-            time.sleep(0.5)
+            time.sleep(0.2)
             
             return project
     
@@ -479,13 +479,13 @@ class LiveCoinWatchClient:
                     project = self.process_coin_data(coin_data)
                     projects.append(project)
                     # Small sleep to reduce database load
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                 except Exception as e:
                     logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
                     continue
             
             # Pause between batches
-            time.sleep(15)
+            time.sleep(8)
         
         logger.success(f"Collected data for {len(projects)} projects")
         return projects
@@ -558,7 +558,7 @@ class LiveCoinWatchClient:
                     projects.append(project)
                     batch_processed += 1
                     # Small sleep to reduce database load
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                 except Exception as e:
                     logger.error(f"Failed to process {coin_data.get('name', 'Unknown')}: {e}")
                     continue
@@ -573,7 +573,7 @@ class LiveCoinWatchClient:
             offset += len(coins_data)
             
             # Pause between batches to respect rate limits
-            time.sleep(15)
+            time.sleep(8)
             
             # Progress update every 10 batches
             if (offset // batch_size) % 10 == 0:
@@ -623,7 +623,7 @@ def main():
     args = parser.parse_args()
     
     # Load environment variables from the config directory
-    config_path = Path(__file__).parent.parent.parent / "config" / "env"
+    config_path = Path(__file__).parent.parent.parent / "config" / ".env"
     load_dotenv(config_path)
     
     # Initialize database

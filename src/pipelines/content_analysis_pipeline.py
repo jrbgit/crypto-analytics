@@ -98,15 +98,15 @@ class ContentAnalysisPipeline:
             timeout=scraper_config.get('timeout', 30),
             max_file_size=scraper_config.get('max_file_size', 50 * 1024 * 1024)
         )
-        self.medium_scraper = MediumScraper(
+            self.medium_scraper = MediumScraper(
             max_articles=scraper_config.get('max_articles', 20),
             recent_days=scraper_config.get('recent_days', 90),
-            delay=scraper_config.get('delay', 2.0)
+            delay=scraper_config.get('delay', 1.5)
         )
-        self.reddit_scraper = RedditScraper(
+            self.reddit_scraper = RedditScraper(
             recent_days=scraper_config.get('recent_days', 30),
             max_posts=scraper_config.get('max_posts', 100),
-            rate_limit_delay=scraper_config.get('delay', 1.0)
+            rate_limit_delay=scraper_config.get('delay', 0.5)
         )
         
         # Initialize analyzers
@@ -1066,7 +1066,7 @@ class ContentAnalysisPipeline:
             
             # Rate limiting between projects
             if i < len(projects_to_analyze) - 1:
-                time.sleep(2)  # 2 seconds between projects
+                time.sleep(1)  # 1 second between projects
         
         # Summary
         stats = {
@@ -1093,7 +1093,7 @@ def main():
     # Initialize pipeline
     pipeline = ContentAnalysisPipeline(
         db_manager=db_manager,
-        scraper_config={'max_pages': 5, 'max_depth': 2, 'delay': 1.0, 'timeout': 30},
+        scraper_config={'max_pages': 5, 'max_depth': 2, 'delay': 0.5, 'timeout': 30},
         analyzer_config={'provider': 'ollama', 'model': 'llama3.1:latest', 'ollama_base_url': 'http://localhost:11434'}
     )
     

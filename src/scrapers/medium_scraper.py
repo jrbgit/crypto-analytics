@@ -67,7 +67,7 @@ class MediumAnalysisResult:
 class MediumScraper:
     """Intelligent Medium scraper for cryptocurrency projects."""
     
-    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 5.0):
+    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 2.0):
         """
         Initialize the Medium scraper.
         
@@ -135,7 +135,7 @@ class MediumScraper:
         
         # Add extra delay every 10 requests to avoid overwhelming server
         if self.request_count % 10 == 0:
-            extra_delay = random.uniform(5, 10)
+            extra_delay = random.uniform(2, 4)
             logger.info(f"Extended rate limit break: {extra_delay:.2f}s after {self.request_count} requests")
             time.sleep(extra_delay)
     
@@ -165,7 +165,7 @@ class MediumScraper:
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries:
                     logger.warning(f"Request failed (attempt {attempt + 1}): {e}")
-                    time.sleep(random.uniform(5, 15))  # Random delay before retry
+                    time.sleep(random.uniform(2, 6))  # Random delay before retry
                 else:
                     logger.error(f"All retry attempts failed for {url}: {e}")
                     raise
