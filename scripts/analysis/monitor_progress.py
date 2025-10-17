@@ -129,9 +129,26 @@ def main():
         
         print(f"  📺 YouTube: {youtube_analyzed:,}/{youtube_total:,} ({youtube_pct:.1f}%) - {youtube_remaining:,} remaining")
         
+        # Twitter links
+        twitter_total = session.execute(text(
+            "SELECT COUNT(*) FROM project_links WHERE link_type = 'twitter'"
+        )).scalar()
+        
+        twitter_analyzed = session.execute(text("""
+            SELECT COUNT(DISTINCT pl.id) 
+            FROM project_links pl 
+            JOIN link_content_analysis lca ON pl.id = lca.link_id 
+            WHERE pl.link_type = 'twitter'
+        """)).scalar()
+        
+        twitter_remaining = twitter_total - twitter_analyzed
+        twitter_pct = (twitter_analyzed / twitter_total * 100) if twitter_total > 0 else 0
+        
+        print(f"  🐦 Twitter: {twitter_analyzed:,}/{twitter_total:,} ({twitter_pct:.1f}%) - {twitter_remaining:,} remaining")
+        
         # Overall totals
-        total_links = website_total + reddit_total + medium_total + whitepaper_total + youtube_total
-        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed + youtube_analyzed
+        total_links = website_total + reddit_total + medium_total + whitepaper_total + youtube_total + twitter_total
+        total_analyzed = website_analyzed + reddit_analyzed + medium_analyzed + whitepaper_analyzed + youtube_analyzed + twitter_analyzed
         total_remaining = total_links - total_analyzed
         overall_pct = (total_analyzed / total_links * 100) if total_links > 0 else 0
         
@@ -208,6 +225,57 @@ def main():
                 print(f"  At current rate: {hours_remaining/24:.1f} days")
         else:
             print("  Cannot estimate - no recent activity detected")
+        
+        # Twitter API Usage Monitoring (if Twitter analysis available)
+        print()
+        print("🐦 Twitter API Usage & Analysis Insights:")
+        
+        # Check for Twitter API usage in the last 30 days
+        twitter_api_usage = session.execute(text("""
+            SELECT COUNT(*) as api_calls_used
+            FROM api_usage 
+            WHERE api_provider = 'twitter' 
+                AND request_timestamp > NOW() - INTERVAL '30 days'
+                AND status_code = 200
+        """)).scalar()
+        
+        if twitter_api_usage:
+            print(f"  🔍 API Calls Used (Last 30 days): {twitter_api_usage}/100 ({twitter_api_usage:.0f}%)")
+            print(f"  📊 Remaining Monthly Quota: {100 - twitter_api_usage} calls")
+            
+            # Twitter analysis quality insights
+            twitter_quality = session.execute(text("""
+                SELECT 
+                    AVG(CAST(lca.technical_depth_score AS REAL)) as avg_authenticity,
+                    AVG(CAST(lca.content_quality_score AS REAL)) as avg_professional,
+                    COUNT(*) as total_analyzed
+                FROM link_content_analysis lca
+                JOIN project_links pl ON lca.link_id = pl.id
+                WHERE pl.link_type = 'twitter'
+                    AND lca.confidence_score IS NOT NULL
+            """)).fetchone()
+            
+            if twitter_quality and twitter_quality[2] > 0:
+                avg_auth, avg_prof, total = twitter_quality
+                print(f"  🎆 Analysis Quality: {total} accounts analyzed")
+                print(f"      • Avg Authenticity Score: {avg_auth:.1f}/10")
+                print(f"      • Avg Professional Score: {avg_prof:.1f}/10")
+            
+            # High priority Twitter accounts analyzed
+            high_priority_twitter = session.execute(text("""
+                SELECT COUNT(*)
+                FROM link_content_analysis lca
+                JOIN project_links pl ON lca.link_id = pl.id
+                JOIN crypto_projects cp ON pl.project_id = cp.id
+                WHERE pl.link_type = 'twitter'
+                    AND (cp.rank <= 100 OR cp.market_cap > 1000000000)
+            """)).scalar()
+            
+            if high_priority_twitter:
+                print(f"  🏆 High Priority Accounts Analyzed: {high_priority_twitter} (Top 100 or $1B+ market cap)")
+        else:
+            print(f"  🚨 No Twitter API usage detected - Twitter analysis may not be active")
+            print(f"  📝 Tip: Run Twitter batch analysis to start analyzing accounts")
 
 if __name__ == "__main__":
     main()
