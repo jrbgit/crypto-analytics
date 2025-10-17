@@ -2,7 +2,7 @@
 """
 Comprehensive Analysis Runner
 
-This script runs analysis across all content types (websites, Medium, whitepapers, Reddit)
+This script runs analysis across all content types (websites, Medium, whitepapers, Reddit, YouTube)
 using llama3.1:latest for the highest quality analysis.
 """
 
@@ -127,13 +127,13 @@ examples:
     parser.add_argument(
         '--disable', 
         type=str, 
-        help='Comma-separated list of analysis types to disable (website,whitepaper,medium,reddit)'
+        help='Comma-separated list of analysis types to disable (website,whitepaper,medium,reddit,youtube)'
     )
     
     parser.add_argument(
         '--enable', 
         type=str, 
-        help='Comma-separated list of analysis types to enable (overrides default, mutually exclusive with --disable)'
+        help='Comma-separated list of analysis types to enable (website,whitepaper,medium,reddit,youtube) - overrides default, mutually exclusive with --disable'
     )
     
     parser.add_argument(
@@ -152,7 +152,7 @@ examples:
 
 def validate_and_process_args(args):
     """Validate and process command line arguments."""
-    available_types = {'website', 'whitepaper', 'medium', 'reddit'}
+    available_types = {'website', 'whitepaper', 'medium', 'reddit', 'youtube'}
     
     # Handle --list-types
     if args.list_types:
@@ -337,11 +337,12 @@ def main():
         'whitepaper': 15,   # Whitepapers - slower due to PDF processing
         'medium': 8,        # Medium - reduced to avoid 429 rate limits
         'reddit': 25,       # Reddit - community analysis
+        'youtube': 20,      # YouTube - channel and video analysis
     }
     
     # Build batch configs based on enabled types and custom sizes
     batch_configs = []
-    for content_type in ['website', 'whitepaper', 'medium', 'reddit']:  # Maintain order
+    for content_type in ['website', 'whitepaper', 'medium', 'reddit', 'youtube']:  # Maintain order
         if content_type in enabled_types:
             batch_size = custom_batch_sizes.get(content_type, default_batch_sizes[content_type])
             batch_configs.append((content_type, batch_size))
@@ -354,8 +355,8 @@ def main():
         sys.exit(0)
     
     # Display configuration
-    if len(enabled_types) < 4:
-        disabled_types = {'website', 'whitepaper', 'medium', 'reddit'} - enabled_types
+    if len(enabled_types) < 5:
+        disabled_types = {'website', 'whitepaper', 'medium', 'reddit', 'youtube'} - enabled_types
         print(f"\n🔧 CONFIGURATION:")
         print(f"   Enabled types: {', '.join(sorted(enabled_types))}")
         if disabled_types:
