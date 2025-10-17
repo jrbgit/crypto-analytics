@@ -1,0 +1,19 @@
+[flake8]
+max-line-length = 100
+extend-ignore =
+    E203,  # whitespace before ':' (PEP8/black conflict)
+    W503,  # line break before binary operator (PEP8/black conflict)
+    E402,  # module level import not at top of file (allow path setup in scripts)
+    F541,  # f-string without placeholders (allow constant f-strings)
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .venv,
+    venv,
+    .eggs,
+    .mypy_cache,
+    .pytest_cache,
+per-file-ignores =
+    scripts/*: E402
