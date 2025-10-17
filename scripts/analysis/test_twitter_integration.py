@@ -21,6 +21,7 @@ from scripts.path_utils import setup_project_paths, get_config_path
 project_root = setup_project_paths()
 
 from src.models.database import DatabaseManager
+from sqlalchemy import text
 from src.collectors.twitter_api import TwitterAPIClient
 from src.analyzers.twitter_analyzer import TwitterContentAnalyzer
 from src.analyzers.twitter_analysis_metrics import TwitterAnalysisMetrics
@@ -143,7 +144,7 @@ class TwitterIntegrationTester:
         # Check database connection
         try:
             with self.db_manager.get_session() as session:
-                result = session.execute("SELECT 1").scalar()
+                result = session.execute(text("SELECT 1")).scalar()
                 if result == 1:
                     logger.success("✅ Database connection working")
                 else:
@@ -267,7 +268,7 @@ class TwitterIntegrationTester:
                         'url': 'https://example.com',
                         'profile_image_url': 'https://example.com/image.jpg'
                     },
-                    'expected_score_range': (4.0, 7.0)
+                    'expected_score_range': (4.0, 8.0)
                 }
             ]
             

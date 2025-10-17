@@ -87,7 +87,7 @@ class TwitterAPIClient:
             monthly_usage = session.query(APIUsage).filter(
                 APIUsage.api_provider == 'twitter',
                 APIUsage.request_timestamp >= month_start,
-                APIUsage.status_code == 200  # Only count successful requests
+                APIUsage.response_status == 200  # Only count successful requests
             ).count()
             
             # Daily usage count
@@ -95,7 +95,7 @@ class TwitterAPIClient:
             daily_usage = session.query(APIUsage).filter(
                 APIUsage.api_provider == 'twitter',
                 APIUsage.request_timestamp >= day_start,
-                APIUsage.status_code == 200  # Only count successful requests
+                APIUsage.response_status == 200  # Only count successful requests
             ).count()
             
             self.rate_limit.current_monthly_usage = monthly_usage
