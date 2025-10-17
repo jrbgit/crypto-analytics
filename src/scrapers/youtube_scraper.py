@@ -34,9 +34,12 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google_auth_oauthlib.flow import Flow
     from google.auth.transport.requests import Request
     import pickle
+    import os
+    # Allow insecure transport for localhost OAuth
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
     YOUTUBE_API_AVAILABLE = True
 except ImportError:
     logger.warning("Google API Client not installed. Run: pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2")
@@ -237,30 +240,50 @@ class YouTubeScraper:
                     credentials = None
             
             if not credentials:
-                # Create OAuth flow configuration
+                # Create OAuth flow configuration using web client
                 client_config = {
                     "web": {
                         "client_id": client_id,
                         "client_secret": client_secret,
                         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                         "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": ["http://localhost:8090/callback"]
+                        "redirect_uris": ["http://localhost:8080"]
                     }
                 }
                 
                 try:
-                    flow = InstalledAppFlow.from_client_config(
+                    # Use web flow for manual code exchange
+                    flow = Flow.from_client_config(
                         client_config, scopes)
-                    # Use localhost callback for headless/server environments
-                    credentials = flow.run_local_server(
-                        port=8090,
-                        prompt='select_account',
-                        success_message='YouTube authorization successful! You can close this window.'
+                    
+                    # Set redirect URI on the flow
+                    redirect_uri = 'http://localhost:8080'
+                    flow.redirect_uri = redirect_uri
+                    auth_url, _ = flow.authorization_url(
+                        prompt='consent',
+                        access_type='offline'
                     )
+                    
+                    print(f"\n🔗 Please visit this URL to authorize the application:")
+                    print(f"{auth_url}\n")
+                    print("After authorizing, you'll be redirected to a page that shows 'Bad Gateway'.")
+                    print("Copy the full URL from your browser address bar and paste it here.")
+                    print("The URL should look like: http://localhost:8080/?state=...&code=...")
+                    
+                    # Get full redirect URL from user
+                    redirect_url = input("\n🔗 Paste the full redirect URL here: ").strip()
+                    
+                    if not redirect_url or 'code=' not in redirect_url:
+                        raise ValueError("Invalid redirect URL provided")
+                    
+                    # Exchange authorization response for credentials
+                    flow.fetch_token(authorization_response=redirect_url)
+                    credentials = flow.credentials
+                    
                     logger.info("Successfully obtained YouTube OAuth credentials")
                 except Exception as e:
                     logger.error(f"OAuth flow failed: {e}")
-                    logger.info("💡 Make sure you can access http://localhost:8090 and have a web browser available")
+                    logger.info("💡 Make sure you copy the authorization code correctly")
                     return None
         
         # Save credentials for future use
