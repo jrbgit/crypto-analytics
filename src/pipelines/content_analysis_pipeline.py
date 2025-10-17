@@ -392,9 +392,27 @@ class ContentAnalysisPipeline:
         scrape_result = self.medium_scraper.scrape_medium_publication(medium_link.url)
         
         if not scrape_result.scrape_success:
-            logger.error(f"Medium scraping failed for {medium_link.url}: {scrape_result.error_message}")
-            self._update_scrape_status(medium_link, success=False, error=scrape_result.error_message)
-            return None
+            # Check if this is an inactive publication (no articles found)
+            if ("No articles found" in scrape_result.error_message or 
+                "feed parsing failed" in scrape_result.error_message or
+                scrape_result.total_articles == 0):
+                
+                # Store basic publication information even if no articles
+                analysis_record = self._store_inactive_medium_publication(
+                    medium_link,
+                    scrape_result
+                )
+                
+                # Update status as processed (not failed) since we handled it gracefully
+                self._update_scrape_status(medium_link, success=True)
+                recent_days = self.medium_scraper.recent_days
+                logger.info(f"Medium publication inactive for {recent_days} days: {project.name} - stored publication info")
+                return analysis_record
+            else:
+                # Actual error (network issues, etc.)
+                logger.error(f"Medium scraping failed for {medium_link.url}: {scrape_result.error_message}")
+                self._update_scrape_status(medium_link, success=False, error=scrape_result.error_message)
+                return None
         
         # Step 2: Analyze with LLM
         medium_analysis = self.medium_analyzer.analyze_medium_publication(scrape_result)
@@ -872,7 +890,69 @@ class ContentAnalysisPipeline:
             session.add(analysis_record)
             session.commit()
             
-            logger.success(f"Stored Medium analysis results for {medium_link.url}")
+        logger.success(f"Stored Medium analysis results for {medium_link.url}")
+        return analysis_record
+    
+    def _store_inactive_medium_publication(self,
+                                         medium_link: ProjectLink,
+                                         scrape_result) -> LinkContentAnalysis:
+        """Store basic information for inactive Medium publications."""
+        
+        with self.db_manager.get_session() as session:
+            # Create a basic analysis record for inactive publication
+            content_hash = hashlib.sha256(f"{scrape_result.publication_name}_inactive_{datetime.now(UTC)}".encode()).hexdigest()
+            
+            # Check if we already have an inactive record for this publication
+            existing = session.query(LinkContentAnalysis).filter(
+                and_(
+                    LinkContentAnalysis.link_id == medium_link.id,
+                    LinkContentAnalysis.summary.like('%inactive%')
+                )
+            ).first()
+            
+            if existing:
+                logger.info(f"Inactive publication record already exists for {medium_link.url}")
+                return existing
+            
+            # Create basic inactive publication record
+            analysis_record = LinkContentAnalysis(
+                link_id=medium_link.id,
+                
+                # Content metadata
+                raw_content=f"No recent articles within analysis period: {scrape_result.error_message or 'Empty feed'}",
+                content_hash=content_hash,
+                page_title=f"{scrape_result.publication_name} - Inactive Medium Publication",
+                pages_analyzed=0,
+                total_word_count=0,
+                
+                # Document info
+                document_type='medium_publication',
+                extraction_method='medium_scraper',
+                
+                # Basic scores for inactive publication
+                technical_depth_score=0,
+                content_quality_score=0,
+                confidence_score=0.9,  # High confidence that it's inactive
+                
+                # Store inactive status info
+                summary=f"Inactive Medium publication: {scrape_result.publication_name} - No articles within analysis period ({self.medium_scraper.recent_days} days). Feed URL: {scrape_result.feed_url}",
+                technical_summary="Publication appears inactive - no recent articles to analyze",
+                key_points=[
+                    "Publication status: Inactive (no recent articles)",
+                    f"Feed URL: {scrape_result.feed_url}",
+                    f"Analysis period: {self.medium_scraper.recent_days} days",
+                    "Recommendation: Monitor for future activity"
+                ],
+                
+                # Analysis metadata
+                model_used='n/a',
+                analysis_version='2.4'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            
+            logger.info(f"Stored inactive Medium publication record for {medium_link.url}")
             return analysis_record
     
     def _log_medium_analysis_usage(self, medium_analysis: MediumAnalysis):
@@ -1354,7 +1434,8 @@ class ContentAnalysisPipeline:
                     '404', '403', '429', '400', 'not found', 'access forbidden', 
                     'robots.txt', 'parked', 'for-sale', 'no pages could be scraped',
                     'insufficient content', 'rate limit', 'minimal content',
-                    'does not exist', 'private', 'restricted', 'banned', 'quarantined'
+                    'does not exist', 'private', 'restricted', 'banned', 'quarantined',
+                    'no articles found', 'feed parsing failed', 'empty feed'
                 ]
                 if any(condition in error_lower for condition in expected_failures):
                     logger.debug(f"Expected failure for {link_obj.url}: {error}")

@@ -401,8 +401,13 @@ def main():
             
             # Brief pause between content types (longer for Medium to avoid rate limits)
             if stats and stats.get('projects_found', 0) > 0:
-                wait_time = 60 if content_type == 'medium' else 15
-                print(f"\nWaiting {wait_time} seconds before processing next content type...")
+                wait_time = 300 if content_type == 'medium' else 15  # 5 minutes for Medium
+                minutes = wait_time // 60
+                seconds = wait_time % 60
+                if minutes > 0:
+                    print(f"\nWaiting {minutes}m {seconds}s before processing next content type...")
+                else:
+                    print(f"\nWaiting {wait_time} seconds before processing next content type...")
                 
                 # Sleep with interrupt checking
                 for i in range(wait_time):

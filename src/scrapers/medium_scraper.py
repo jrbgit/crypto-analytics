@@ -362,13 +362,14 @@ class MediumScraper:
                     reading_time = 0
                     claps = 0
                     
-                    # Only fetch full content for first few articles to avoid rate limiting
-                    if len(articles) < 5:  # Limit full content extraction
-                        extracted_content, extracted_reading_time, extracted_claps = self.extract_article_content(article_url)
-                        if extracted_content:
-                            full_content = extracted_content
-                            reading_time = extracted_reading_time
-                            claps = extracted_claps
+                    # Skip individual article fetching to avoid Cloudflare blocking
+                    # Use RSS content only for now
+                    # if len(articles) < 5:  # Limit full content extraction
+                    #     extracted_content, extracted_reading_time, extracted_claps = self.extract_article_content(article_url)
+                    #     if extracted_content:
+                    #         full_content = extracted_content
+                    #         reading_time = extracted_reading_time
+                    #         claps = extracted_claps
                     
                     # Create content hash
                     content_hash = hashlib.sha256(full_content.encode()).hexdigest()
