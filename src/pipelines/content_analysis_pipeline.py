@@ -514,9 +514,28 @@ class ContentAnalysisPipeline:
         scrape_result = self.youtube_scraper.scrape_youtube_channel(youtube_link.url)
         
         if not scrape_result.scrape_success:
-            logger.error(f"YouTube scraping failed for {youtube_link.url}: {scrape_result.error_message}")
-            self._update_scrape_status(youtube_link, success=False, error=scrape_result.error_message)
-            return None
+            error_msg = scrape_result.error_message or "Unknown error"
+            error_lower = error_msg.lower()
+            
+            # Check if this is an expected failure that should be handled gracefully
+            expected_failures = [
+                'could not extract channel id', 'channel not found', 
+                'no recent videos', 'channel id from url', 'invalid url',
+                'channel does not exist', '404'
+            ]
+            
+            if any(condition in error_lower for condition in expected_failures):
+                # This is an expected failure - log as warning and update status as processed
+                logger.warning(f"YouTube channel unavailable: {project.name} - {error_msg} (expected failure)")
+                self._update_scrape_status(youtube_link, success=True, error=None)  # Mark as processed, not failed
+                
+                # Create a minimal analysis record to show why it failed
+                return self._create_youtube_unavailable_record(youtube_link, scrape_result)
+            else:
+                # Unexpected error (API issues, network problems, etc.)
+                logger.error(f"YouTube scraping failed for {youtube_link.url}: {error_msg}")
+                self._update_scrape_status(youtube_link, success=False, error=error_msg)
+                return None
         
         # Step 2: Analyze with YouTube analyzer
         youtube_analysis = self.youtube_analyzer.analyze_youtube_content(scrape_result)
@@ -539,7 +558,7 @@ class ContentAnalysisPipeline:
         # Step 5: Log API usage
         self._log_youtube_analysis_usage(youtube_analysis)
         
-        logger.success(f"YouTube analysis complete for {project.name}: Educational content {youtube_analysis.educational_content_ratio:.1%}")
+        logger.success(f"YouTube analysis complete for {project.name}: Educational content {youtube_analysis.educational_value_score}/10")
         
         return analysis_record
     
@@ -1104,7 +1123,7 @@ class ContentAnalysisPipeline:
                 summary=youtube_analysis.channel_summary,
                 technical_summary=f"Communication style: {youtube_analysis.communication_style}. Educational value: {youtube_analysis.educational_value_score}/10. Upload consistency: {youtube_analysis.consistency_score}/10. Transparency: {youtube_analysis.transparency_level}",
                 key_points=(
-                    [f"Educational content ratio: {youtube_analysis.educational_content_ratio:.1%}"] +
+                    [f"Educational value: {youtube_analysis.educational_value_score}/10"] +
                     [f"Content quality: {youtube_analysis.content_quality_score}/10"] +
                     [f"Technical depth: {youtube_analysis.technical_depth_score}/10"] +
                     [f"Communication style: {youtube_analysis.communication_style}"] +
@@ -1242,6 +1261,46 @@ class ContentAnalysisPipeline:
                 http_status_code=0,
                 error_details=error_msg
             )
+    
+    def _create_youtube_unavailable_record(self, youtube_link: ProjectLink, scrape_result) -> LinkContentAnalysis:
+        """Create a basic record for unavailable YouTube channels."""
+        with self.db_manager.get_session() as session:
+            # Create a minimal analysis record to mark this as processed
+            analysis_record = LinkContentAnalysis(
+                link_id=youtube_link.id,
+                
+                # Minimal content info
+                raw_content=f"YouTube channel unavailable: {scrape_result.error_message}",
+                content_hash=hashlib.sha256(scrape_result.error_message.encode()).hexdigest()[:64],
+                page_title=f"YouTube Channel - Unavailable",
+                pages_analyzed=0,
+                total_word_count=0,
+                
+                # Document info
+                document_type='youtube_channel',
+                extraction_method='youtube_scraper',
+                
+                # Use existing fields to indicate unavailability
+                summary=f"YouTube channel unavailable: {scrape_result.error_message}",
+                confidence_score=0.0,  # Zero confidence indicates unavailable
+                technical_depth_score=0,
+                content_quality_score=0,
+                marketing_vs_tech_ratio=0.5,  # Neutral
+                
+                # Store error details
+                red_flags=[f"Channel unavailable: {scrape_result.error_message}"],
+                key_points=["Status: Unavailable", f"Reason: {scrape_result.error_message}"],
+                
+                # Analysis metadata
+                model_used='n/a',
+                analysis_version='2.4'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            session.refresh(analysis_record)
+            
+            return analysis_record
     
     def _create_reddit_unavailable_record(self, reddit_link: ProjectLink, scrape_result) -> LinkContentAnalysis:
         """Create a basic record for unavailable Reddit communities."""

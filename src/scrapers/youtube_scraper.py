@@ -317,6 +317,8 @@ class YouTubeScraper:
             # https://youtube.com/@username
             # https://youtube.com/c/channelname
             # https://youtube.com/user/username
+            # https://www.youtube.com/binanceyoutube (custom handle without @)
+            # https://www.youtube.com/hederahashgraph (custom handle without @)
             
             if '/channel/' in parsed.path:
                 # Direct channel ID URL
@@ -334,6 +336,14 @@ class YouTubeScraper:
                 # Legacy user URL
                 username = parsed.path.split('/user/')[1].split('/')[0]
                 return self._resolve_username_to_channel_id(username)
+            else:
+                # Handle custom handles without prefix like /binanceyoutube or /hederahashgraph
+                path_parts = parsed.path.strip('/').split('/')
+                if len(path_parts) >= 1 and path_parts[0]:
+                    # This might be a custom handle like "binanceyoutube" or "hederahashgraph"
+                    custom_handle = path_parts[0]
+                    logger.debug(f"Attempting to resolve custom handle: {custom_handle}")
+                    return self._resolve_username_to_channel_id(custom_handle)
             
             logger.warning(f"Could not extract channel ID from {youtube_url}")
             return None

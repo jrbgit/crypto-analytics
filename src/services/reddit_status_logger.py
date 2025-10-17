@@ -71,6 +71,42 @@ class RedditStatusLogger:
         )
         logger.success(f"Reddit scraping successful: {url} ({posts_found} posts)")
 
+    def log_not_found(self, link_id: int, url: str, subreddit_name: str, error_details: str, error_type: str = "not_found"):
+        """Log when a Reddit community cannot be found or accessed."""
+        self.log_reddit_status(
+            link_id=link_id,
+            status_type=RedditStatusType.ERROR,
+            status_message=f"Reddit community not found: r/{subreddit_name}",
+            posts_found=0,
+            error_type=error_type,
+            error_details=error_details
+        )
+        logger.warning(f"Reddit community not found: {url} (r/{subreddit_name}) - {error_details}")
+
+    def log_access_denied(self, link_id: int, url: str, subreddit_name: str, http_status_code: int, error_details: str):
+        """Log when access to a Reddit community is denied (private, restricted, etc.)."""
+        self.log_reddit_status(
+            link_id=link_id,
+            status_type=RedditStatusType.ERROR,
+            status_message=f"Access denied to r/{subreddit_name} (HTTP {http_status_code})",
+            posts_found=0,
+            error_type="access_denied",
+            error_details=error_details
+        )
+        logger.warning(f"Access denied to Reddit community: {url} (r/{subreddit_name}) - {error_details}")
+
+    def log_community_unavailable(self, link_id: int, url: str, subreddit_name: str, reason: str):
+        """Log when a Reddit community is unavailable (banned, quarantined, etc.)."""
+        self.log_reddit_status(
+            link_id=link_id,
+            status_type=RedditStatusType.ERROR,
+            status_message=f"Reddit community unavailable: r/{subreddit_name}",
+            posts_found=0,
+            error_type="community_unavailable",
+            error_details=reason
+        )
+        logger.warning(f"Reddit community unavailable: {url} (r/{subreddit_name}) - {reason}")
+
 
 def create_reddit_status_logger(db_manager) -> RedditStatusLogger:
     return RedditStatusLogger(db_manager)

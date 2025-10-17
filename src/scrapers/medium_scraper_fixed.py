@@ -1,18 +1,18 @@
 """
-Medium Scraper Module for Cryptocurrency Project Analysis
+Medium Scraper Module for Cryptocurrency Project Analysis - Cloudflare Bypass Version
 
 This module handles:
-- Fetching Medium RSS feeds (https://medium.com/feed/@username or /publication)
+- Using RSS2JSON API to bypass Medium's Cloudflare protection
+- Fetching Medium RSS feeds via proxy service
 - Extracting recent articles and their content
 - Tracking publication frequency and patterns
 - Analyzing content types (development updates vs marketing)
-- RSS feed parsing and content extraction
 """
 
 import requests
 import time
 import hashlib
-import feedparser
+import json
 import random
 from urllib.parse import urljoin, urlparse, parse_qs
 from typing import Dict, List, Optional, Set, Tuple
@@ -64,10 +64,10 @@ class MediumAnalysisResult:
     avg_reading_time: float = 0.0
 
 
-class MediumScraper:
-    """Intelligent Medium scraper for cryptocurrency projects."""
+class MediumScraperFixed:
+    """Intelligent Medium scraper that bypasses Cloudflare protection."""
     
-    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 1.0):
+    def __init__(self, max_articles: int = 20, recent_days: int = 90, delay: float = 2.0):
         """
         Initialize the Medium scraper.
         
@@ -83,9 +83,12 @@ class MediumScraper:
         self.request_count = 0
         self.last_request_time = 0
         
+        # AllOrigins API configuration for bypassing CORS/Cloudflare
+        self.allorigins_base = "https://api.allorigins.win/raw?url="
+        
         # Set a reasonable user agent
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 CryptoAnalytics/1.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         
         # Keywords for classifying article types
@@ -135,7 +138,7 @@ class MediumScraper:
         
         # Add extra delay every 10 requests to avoid overwhelming server
         if self.request_count % 10 == 0:
-            extra_delay = random.uniform(1, 2)
+            extra_delay = random.uniform(1, 3)
             logger.info(f"Extended rate limit break: {extra_delay:.2f}s after {self.request_count} requests")
             time.sleep(extra_delay)
     
@@ -247,66 +250,9 @@ class MediumScraper:
         
         return 'other'
     
-    def extract_article_content(self, article_url: str) -> Tuple[str, int, int]:
+    def parse_feed_via_allorigins(self, feed_url: str) -> List[MediumArticle]:
         """
-        Extract content from a single Medium article.
-        
-        Returns:
-            Tuple of (content, reading_time_minutes, claps)
-        """
-        try:
-            response = self._make_request_with_retry(article_url)
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Remove script, style, and other non-content elements
-            for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                element.decompose()
-            
-            # Try to find article content with various selectors
-            content_selectors = [
-                'article', '.postArticle-content', '.section-content', 
-                '.markup', '[data-testid="storyContent"]', 'main'
-            ]
-            
-            content_element = None
-            for selector in content_selectors:
-                content_element = soup.select_one(selector)
-                if content_element:
-                    break
-            
-            if not content_element:
-                content_element = soup.find('body')
-            
-            # Extract text content
-            content = content_element.get_text(separator=' ', strip=True) if content_element else ""
-            content = re.sub(r'\s+', ' ', content).strip()
-            
-            # Try to extract reading time (Medium usually displays this)
-            reading_time = 0
-            reading_time_element = soup.find(string=re.compile(r'\d+\s*min\s*read'))
-            if reading_time_element:
-                match = re.search(r'(\d+)\s*min', reading_time_element)
-                if match:
-                    reading_time = int(match.group(1))
-            
-            # Try to extract claps count (if available)
-            claps = 0
-            claps_element = soup.find(attrs={'aria-label': re.compile(r'\d+\s*claps')})
-            if claps_element:
-                match = re.search(r'(\d+)', claps_element.get('aria-label', ''))
-                if match:
-                    claps = int(match.group(1))
-            
-            return content, reading_time, claps
-            
-        except Exception as e:
-            logger.warning(f"Could not extract content from {article_url}: {e}")
-            return "", 0, 0
-    
-    def parse_feed(self, feed_url: str) -> List[MediumArticle]:
-        """
-        Parse Medium RSS feed using AllOrigins proxy to bypass Cloudflare.
+        Parse Medium RSS feed using AllOrigins API to bypass Cloudflare.
         
         Returns:
             List of MediumArticle objects
@@ -314,11 +260,14 @@ class MediumScraper:
         try:
             logger.info(f"Fetching RSS feed via AllOrigins: {feed_url}")
             
-            # Use AllOrigins to bypass Cloudflare protection
-            proxy_url = f"https://api.allorigins.win/raw?url={feed_url}"
-            response = self._make_request_with_retry(proxy_url)
+            # Construct AllOrigins API URL
+            api_url = f"{self.allorigins_base}{feed_url}"
             
-            # Parse RSS with feedparser
+            # Fetch feed data with rate limiting and retry logic
+            response = self._make_request_with_retry(api_url)
+            
+            # Parse RSS/XML content directly using feedparser
+            import feedparser
             feed = feedparser.parse(response.content)
             
             if not feed.entries:
@@ -351,43 +300,38 @@ class MediumScraper:
                     if hasattr(entry, 'tags'):
                         tags = [tag.term for tag in entry.tags if hasattr(tag, 'term')]
                     
-                    # Get content from RSS (summary) or fetch full content
-                    rss_content = ""
+                    # Get content from RSS (summary) 
+                    content = ""
                     if hasattr(entry, 'summary'):
                         soup = BeautifulSoup(entry.summary, 'html.parser')
-                        rss_content = soup.get_text(strip=True)
-                    
-                    # For full content, fetch the article page (optional, can be resource intensive)
-                    full_content = rss_content  # Start with RSS content
-                    reading_time = 0
-                    claps = 0
-                    
-                    # Only fetch full content for first few articles to avoid rate limiting
-                    if len(articles) < 5:  # Limit full content extraction
-                        extracted_content, extracted_reading_time, extracted_claps = self.extract_article_content(article_url)
-                        if extracted_content:
-                            full_content = extracted_content
-                            reading_time = extracted_reading_time
-                            claps = extracted_claps
+                        content = soup.get_text(strip=True)
+                    elif hasattr(entry, 'content'):
+                        # Handle content field if available
+                        if isinstance(entry.content, list) and len(entry.content) > 0:
+                            soup = BeautifulSoup(entry.content[0].value, 'html.parser')
+                            content = soup.get_text(strip=True)
                     
                     # Create content hash
-                    content_hash = hashlib.sha256(full_content.encode()).hexdigest()
+                    content_hash = hashlib.sha256(content.encode()).hexdigest()
                     
                     # Count words
-                    word_count = len(full_content.split())
+                    word_count = len(content.split())
+                    
+                    # Estimate reading time (roughly 200 words per minute)
+                    reading_time = max(1, word_count // 200)
                     
                     # Classify article type
-                    article_type = self.classify_article_type(title, full_content, tags)
+                    article_type = self.classify_article_type(title, content, tags)
                     
                     article = MediumArticle(
                         url=article_url,
                         title=title,
-                        content=full_content,
+                        content=content,
                         content_hash=content_hash,
                         author=author,
                         published_date=published_date or datetime.now(UTC),
                         tags=tags,
-                        claps=claps,
+                        claps=0,  # Not available from RSS feed
                         reading_time=reading_time,
                         word_count=word_count,
                         article_type=article_type
@@ -448,7 +392,7 @@ class MediumScraper:
     
     def scrape_medium_publication(self, medium_url: str) -> MediumAnalysisResult:
         """
-        Scrape and analyze a Medium publication or profile.
+        Scrape and analyze a Medium publication or profile using RSS2JSON API.
         
         Args:
             medium_url: Medium publication or profile URL
@@ -462,8 +406,8 @@ class MediumScraper:
             # Construct RSS feed URL
             feed_url = self.construct_feed_url(medium_url)
             
-            # Parse RSS feed and extract articles
-            articles = self.parse_feed(feed_url)
+            # Parse RSS feed via AllOrigins API
+            articles = self.parse_feed_via_allorigins(feed_url)
             
             if not articles:
                 return MediumAnalysisResult(
@@ -525,12 +469,12 @@ class MediumScraper:
 
 # Test functionality
 if __name__ == "__main__":
-    scraper = MediumScraper(max_articles=10, recent_days=30)
+    scraper = MediumScraperFixed(max_articles=10, recent_days=30)
     
     # Test with a few known Medium publications
     test_urls = [
-        "https://medium.com/@binance",
-        "https://medium.com/chainlink", 
+        "https://medium.com/@chainlink",
+        "https://medium.com/binance", 
         "https://medium.com/solana-labs"
     ]
     
