@@ -103,7 +103,7 @@ class URLFilter:
         r'jsdelivr\.net',
         r'unpkg\.com',
         
-        # Social media (handled separately)
+        # Social media (these have dedicated scrapers, so don't skip)
         r'facebook\.com',
         r'twitter\.com',
         r'instagram\.com',
@@ -505,6 +505,65 @@ class URLFilter:
             return parsed.geturl()
         except Exception:
             return url  # Return original if parsing fails
+    
+    def extract_youtube_channel_id(self, youtube_url: str) -> Optional[str]:
+        """
+        Extract YouTube channel ID from various URL formats for validation.
+        
+        Args:
+            youtube_url: YouTube channel URL
+            
+        Returns:
+            Channel ID or None if extraction fails
+        """
+        try:
+            parsed = urlparse(youtube_url)
+            
+            # Only process YouTube URLs
+            if 'youtube.com' not in parsed.netloc and 'youtu.be' not in parsed.netloc:
+                return None
+            
+            # Handle different YouTube URL formats:
+            # https://youtube.com/channel/UCxxxxx
+            # https://youtube.com/@username
+            # https://youtube.com/c/channelname
+            # https://youtube.com/user/username
+            
+            if '/channel/' in parsed.path:
+                # Direct channel ID URL
+                channel_id = parsed.path.split('/channel/')[1].split('/')[0]
+                # Validate channel ID format (should start with UC and be 24 characters)
+                if len(channel_id) == 24 and channel_id.startswith('UC'):
+                    return channel_id
+            elif parsed.path.startswith('/@'):
+                # Handle @username format - return username without @
+                username = parsed.path[2:].split('/')[0]
+                return f"@{username}" if username else None
+            elif '/c/' in parsed.path:
+                # Custom channel URL
+                channel_name = parsed.path.split('/c/')[1].split('/')[0]
+                return f"c/{channel_name}" if channel_name else None
+            elif '/user/' in parsed.path:
+                # Legacy user URL
+                username = parsed.path.split('/user/')[1].split('/')[0]
+                return f"user/{username}" if username else None
+            
+            return None
+            
+        except Exception:
+            return None
+    
+    def is_valid_youtube_channel_url(self, url: str) -> bool:
+        """
+        Check if URL is a valid YouTube channel URL.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if valid YouTube channel URL
+        """
+        return self.extract_youtube_channel_id(url) is not None
 
 
 # Global instance for easy importing

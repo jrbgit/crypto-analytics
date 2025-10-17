@@ -34,10 +34,12 @@ from services.whitepaper_status_logger import create_whitepaper_status_logger
 from scrapers.whitepaper_scraper import WhitepaperScraper, WhitepaperContent
 from scrapers.medium_scraper import MediumScraper, MediumAnalysisResult
 from scrapers.reddit_scraper import RedditScraper, RedditAnalysisResult
+from scrapers.youtube_scraper import YouTubeScraper, YouTubeAnalysisResult
 from analyzers.website_analyzer import WebsiteContentAnalyzer, WebsiteAnalysis
 from analyzers.whitepaper_analyzer import WhitepaperContentAnalyzer, WhitepaperAnalysis
 from analyzers.medium_analyzer import MediumContentAnalyzer, MediumAnalysis
 from analyzers.reddit_analyzer import RedditContentAnalyzer, RedditAnalysis
+from analyzers.youtube_analyzer import YouTubeAnalyzer, YouTubeContentAnalysis
 from services.reddit_status_logger import create_reddit_status_logger
 
 # Load environment variables
@@ -110,6 +112,11 @@ class ContentAnalysisPipeline:
             max_posts=scraper_config.get('max_posts', 100),
             rate_limit_delay=scraper_config.get('delay', 0.2)
         )
+        self.youtube_scraper = YouTubeScraper(
+            recent_days=scraper_config.get('recent_days', 90),
+            max_videos=scraper_config.get('max_videos', 50),
+            rate_limit_delay=scraper_config.get('delay', 0.1)
+        )
         
         # Initialize analyzers
         analyzer_config = analyzer_config or {}
@@ -133,6 +140,7 @@ class ContentAnalysisPipeline:
             model=analyzer_config.get('model', 'llama3.1:latest'),
             ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
         )
+        self.youtube_analyzer = YouTubeAnalyzer()
         
         # Analysis settings
         self.max_projects_per_run = 10  # Limit for cost control
@@ -150,7 +158,7 @@ class ContentAnalysisPipeline:
             List of (project, link) tuples ready for analysis
         """
         if link_types is None:
-            link_types = ['website', 'whitepaper', 'medium', 'reddit']
+            link_types = ['website', 'whitepaper', 'medium', 'reddit', 'youtube']
             
         with self.db_manager.get_session() as session:
             # Query for projects with links that need analysis
@@ -212,6 +220,8 @@ class ContentAnalysisPipeline:
                 return self._analyze_medium(project, link)
             elif link.link_type == 'reddit':
                 return self._analyze_reddit(project, link)
+            elif link.link_type == 'youtube':
+                return self._analyze_youtube(project, link)
             else:
                 logger.warning(f"Unsupported link type: {link.link_type}")
                 return None
@@ -498,8 +508,43 @@ class ContentAnalysisPipeline:
         
         return analysis_record
     
+    def _analyze_youtube(self, project: CryptoProject, youtube_link: ProjectLink) -> Optional[LinkContentAnalysis]:
+        """Analyze a YouTube channel link."""
+        # Step 1: Scrape the YouTube channel
+        scrape_result = self.youtube_scraper.scrape_youtube_channel(youtube_link.url)
+        
+        if not scrape_result.scrape_success:
+            logger.error(f"YouTube scraping failed for {youtube_link.url}: {scrape_result.error_message}")
+            self._update_scrape_status(youtube_link, success=False, error=scrape_result.error_message)
+            return None
+        
+        # Step 2: Analyze with YouTube analyzer
+        youtube_analysis = self.youtube_analyzer.analyze_youtube_content(scrape_result)
+        
+        if not youtube_analysis:
+            logger.error(f"YouTube analysis failed for {youtube_link.url}")
+            self._update_scrape_status(youtube_link, success=False, error="YouTube analysis failed")
+            return None
+        
+        # Step 3: Store results in database
+        analysis_record = self._store_youtube_analysis_results(
+            youtube_link,
+            scrape_result,
+            youtube_analysis
+        )
+        
+        # Step 4: Update scrape status
+        self._update_scrape_status(youtube_link, success=True)
+        
+        # Step 5: Log API usage
+        self._log_youtube_analysis_usage(youtube_analysis)
+        
+        logger.success(f"YouTube analysis complete for {project.name}: Educational content {youtube_analysis.educational_content_ratio:.1%}")
+        
+        return analysis_record
     
-    def _store_website_analysis_results(self, 
+    
+    def _store_website_analysis_results(self,
                                       website_link: ProjectLink, 
                                       scrape_result: WebsiteAnalysisResult, 
                                       website_analysis: WebsiteAnalysis) -> LinkContentAnalysis:
@@ -996,6 +1041,112 @@ class ContentAnalysisPipeline:
             session.add(usage)
             session.commit()
     
+    def _store_youtube_analysis_results(self,
+                                      youtube_link: ProjectLink,
+                                      scrape_result: YouTubeAnalysisResult,
+                                      youtube_analysis: YouTubeContentAnalysis) -> LinkContentAnalysis:
+        """Store YouTube analysis results in the database."""
+        
+        with self.db_manager.get_session() as session:
+            # Combine video content for storage
+            combined_content = "\n\n".join([
+                f"=== {video.title} ({video.published_at.strftime('%Y-%m-%d')}) ===\nViews: {video.view_count:,} | Likes: {video.like_count:,} | Comments: {video.comment_count:,}\nType: {video.video_type}\nDescription: {video.description[:300]}..."
+                for video in scrape_result.videos_analyzed[:10]  # Top 10 videos
+            ])
+            
+            # Sanitize combined content for database storage
+            combined_content = sanitize_content_for_storage(combined_content)
+            
+            # Calculate content hash based on channel and analysis time
+            content_hash = hashlib.sha256(f"{scrape_result.channel_id}_{scrape_result.analysis_timestamp}".encode()).hexdigest()
+            
+            # Check if we already have analysis for this content
+            existing = session.query(LinkContentAnalysis).filter(
+                and_(
+                    LinkContentAnalysis.link_id == youtube_link.id,
+                    LinkContentAnalysis.content_hash == content_hash
+                )
+            ).first()
+            
+            if existing:
+                logger.info(f"Content unchanged for {youtube_link.url}, skipping analysis storage")
+                return existing
+            
+            # Create new analysis record with YouTube-specific data
+            analysis_record = LinkContentAnalysis(
+                link_id=youtube_link.id,
+                
+                # Content metadata
+                raw_content=combined_content[:50000],  # Limit size for database
+                content_hash=content_hash,
+                page_title=f"{scrape_result.channel_info.title if scrape_result.channel_info else 'Unknown'} - YouTube Channel",
+                pages_analyzed=youtube_analysis.videos_analyzed_count,
+                total_word_count=sum(len(video.title + video.description) for video in scrape_result.videos_analyzed),
+                
+                # Document info
+                document_type='youtube_channel',
+                extraction_method='youtube_scraper',
+                
+                # Analysis scores adapted for YouTube
+                technical_depth_score=youtube_analysis.technical_depth_score,
+                content_quality_score=youtube_analysis.content_quality_score,
+                confidence_score=youtube_analysis.confidence_score,
+                marketing_vs_tech_ratio=youtube_analysis.marketing_vs_substance_ratio,
+                
+                # YouTube-specific insights mapped to existing fields
+                use_cases=youtube_analysis.project_focus_areas,  # Focus areas as use cases
+                core_features=youtube_analysis.primary_content_types,  # Content types as features
+                target_audience=[youtube_analysis.target_audience],  # Target audience
+                roadmap_items=youtube_analysis.development_activity_indicators,
+                red_flags=youtube_analysis.red_flags,
+                
+                # Store YouTube-specific data in JSON fields
+                summary=youtube_analysis.channel_summary,
+                technical_summary=f"Communication style: {youtube_analysis.communication_style}. Educational value: {youtube_analysis.educational_value_score}/10. Upload consistency: {youtube_analysis.consistency_score}/10. Transparency: {youtube_analysis.transparency_level}",
+                key_points=(
+                    [f"Educational content ratio: {youtube_analysis.educational_content_ratio:.1%}"] +
+                    [f"Content quality: {youtube_analysis.content_quality_score}/10"] +
+                    [f"Technical depth: {youtube_analysis.technical_depth_score}/10"] +
+                    [f"Communication style: {youtube_analysis.communication_style}"] +
+                    [f"Target audience: {youtube_analysis.target_audience}"] +
+                    [f"Transparency level: {youtube_analysis.transparency_level}"] +
+                    youtube_analysis.positive_indicators[:3]  # Top 3 positive indicators
+                ),
+                
+                # Additional fields using JSONB
+                entities=youtube_analysis.topics_covered,
+                categories=youtube_analysis.primary_content_types,
+                recent_updates=youtube_analysis.development_activity_indicators,
+                
+                # Analysis metadata
+                model_used=youtube_analysis.analysis_method,
+                analysis_version='2.4'
+            )
+            
+            session.add(analysis_record)
+            session.commit()
+            
+            logger.success(f"Stored YouTube analysis results for {youtube_link.url}")
+            return analysis_record
+    
+    def _log_youtube_analysis_usage(self, youtube_analysis: YouTubeContentAnalysis):
+        """Log YouTube analysis usage for cost tracking."""
+        with self.db_manager.get_session() as session:
+            # Estimate token usage based on videos analyzed
+            estimated_tokens = youtube_analysis.videos_analyzed_count * 500  # Rough estimate per video analyzed
+            
+            usage = APIUsage(
+                api_provider='youtube_api',
+                endpoint='youtube_analysis',
+                response_status=200,
+                credits_used=1,
+                response_size=estimated_tokens,
+                response_time=0.0  # We don't track this currently
+            )
+            
+            session.add(usage)
+            session.commit()
+    
     def _log_whitepaper_error(self, whitepaper_link: ProjectLink, error_msg: str, scrape_result: WhitepaperContent):
         """Log whitepaper errors to database with appropriate categorization."""
         error_lower = error_msg.lower()
@@ -1182,7 +1333,8 @@ class ContentAnalysisPipeline:
                 'websites_analyzed': 0,
                 'whitepapers_analyzed': 0,
                 'medium_analyzed': 0,
-                'reddit_analyzed': 0
+                'reddit_analyzed': 0,
+                'youtube_analyzed': 0
             }
         
         # Process each project
@@ -1192,6 +1344,7 @@ class ContentAnalysisPipeline:
         whitepapers_analyzed = 0
         medium_analyzed = 0
         reddit_analyzed = 0
+        youtube_analyzed = 0
         
         for i, (project, link) in enumerate(projects_to_analyze):
             logger.info(f"Processing {i+1}/{len(projects_to_analyze)}: {project.name} ({link.link_type})")
@@ -1208,6 +1361,8 @@ class ContentAnalysisPipeline:
                     medium_analyzed += 1
                 elif link.link_type == 'reddit':
                     reddit_analyzed += 1
+                elif link.link_type == 'youtube':
+                    youtube_analyzed += 1
             else:
                 failed_analyses += 1
             
@@ -1223,11 +1378,12 @@ class ContentAnalysisPipeline:
             'websites_analyzed': websites_analyzed,
             'whitepapers_analyzed': whitepapers_analyzed,
             'medium_analyzed': medium_analyzed,
-            'reddit_analyzed': reddit_analyzed
+            'reddit_analyzed': reddit_analyzed,
+            'youtube_analyzed': youtube_analyzed
         }
         
         logger.info(f"Batch complete: {successful_analyses} successful, {failed_analyses} failed")
-        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications, {reddit_analyzed} reddit communities")
+        logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications, {reddit_analyzed} reddit communities, {youtube_analyzed} youtube channels")
         return stats
 
 
@@ -1267,6 +1423,7 @@ def main():
     print(f"Whitepapers analyzed: {stats['whitepapers_analyzed']}")
     print(f"Medium publications analyzed: {stats['medium_analyzed']}")
     print(f"Reddit communities analyzed: {stats['reddit_analyzed']}")
+    print(f"YouTube channels analyzed: {stats['youtube_analyzed']}")
     print(f"Success rate: {stats['successful_analyses']/stats['projects_found']*100:.1f}%" if stats['projects_found'] > 0 else "N/A")
 
 
