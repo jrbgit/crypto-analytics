@@ -134,3 +134,32 @@ logs/
 # Runtime state files
 analysis_state.json
 error_report.json
+
+# Database files
+*.db
+*.sqlite*
+postgresql.conf/
+
+# API keys and secrets
+*.key
+*.pem
+*.crt
+secrets/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+ehthumbs.db
