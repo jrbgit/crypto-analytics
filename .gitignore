@@ -135,6 +135,21 @@ logs/
 analysis_state.json
 error_report.json
 
+# Build and distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Development
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Temporary state files
+logs/analysis_state.json
+logs/error_report.json
+
 # Database files
 *.db
 *.sqlite*
