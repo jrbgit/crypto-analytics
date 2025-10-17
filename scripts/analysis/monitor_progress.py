@@ -236,7 +236,7 @@ def main():
             FROM api_usage 
             WHERE api_provider = 'twitter' 
                 AND request_timestamp > NOW() - INTERVAL '30 days'
-                AND status_code = 200
+                AND response_status = 200
         """)).scalar()
         
         if twitter_api_usage:
