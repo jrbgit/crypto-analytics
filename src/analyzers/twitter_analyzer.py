@@ -405,16 +405,34 @@ def analyze_twitter_link_batch(database_url: str, limit: int = 10) -> Dict[str, 
     
     # Check initial usage
     initial_stats = analyzer.get_usage_stats()
-    logger.info(f"Initial API usage: {initial_stats['monthly_usage']}/{initial_stats['monthly_limit']}")
-    
+    logger.info(f"Initial API usage: Monthly {initial_stats['monthly_usage']}/{initial_stats['monthly_limit']}, Daily {initial_stats['daily_usage']}/{initial_stats['daily_limit']}")
+
+    # Determine effective limit considering daily and monthly remaining calls
+    effective_limit = limit
     if initial_stats['monthly_remaining'] <= 0:
         logger.error("No API calls remaining this month")
         return {
             'success': False,
-            'error': 'No API calls remaining',
+            'error': 'No API calls remaining this month',
             'stats': initial_stats
         }
-    
+    if initial_stats['daily_remaining'] <= 0:
+        logger.error("No API calls remaining today")
+        return {
+            'success': False,
+            'error': 'No API calls remaining today',
+            'stats': initial_stats
+        }
+
+    effective_limit = min(limit, initial_stats['daily_remaining'], initial_stats['monthly_remaining'])
+    if effective_limit <= 0:
+        logger.warning("Effective limit for analysis is 0, skipping batch.")
+        return {
+            'success': True,
+            'analyzed': 0,
+            'message': 'No API calls available for analysis within current limits'
+        }
+
     # Find Twitter links that need analysis
     with db_manager.get_session() as session:
         twitter_links = session.execute(text("""
@@ -435,7 +453,7 @@ def analyze_twitter_link_batch(database_url: str, limit: int = 10) -> Dict[str, 
                 )
             ORDER BY cp.market_cap DESC NULLS LAST, cp.rank ASC NULLS LAST
             LIMIT :limit
-        """), {'limit': limit}).fetchall()
+        """), {'limit': effective_limit}).fetchall()
     
     if not twitter_links:
         logger.info("No Twitter links found that need analysis")

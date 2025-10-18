@@ -179,6 +179,9 @@ class TelegramAPIClient:
         except requests.exceptions.ConnectionError:
             logger.error(f"Telegram API connection error: {method}")
             return None
+        except KeyboardInterrupt:
+            logger.warning(f"KeyboardInterrupt received during API request: {method}")
+            raise  # Re-raise to allow graceful shutdown
         except requests.exceptions.RequestException as e:
             logger.error(f"Telegram API request failed: {e}")
             return None

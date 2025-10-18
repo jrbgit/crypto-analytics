@@ -7,6 +7,7 @@ to provide comprehensive Telegram channel analysis with database storage.
 
 import json
 import os
+import signal
 import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
@@ -476,6 +477,15 @@ class TelegramContentAnalyzer:
         return self.api_client.can_make_request()
 
 
+# Global flag for graceful shutdown
+_shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    global _shutdown_requested
+    logger.warning(f"Received signal {signum}, requesting graceful shutdown...")
+    _shutdown_requested = True
+
 def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str, Any]:
     """
     Batch analyze Telegram links that need analysis.
@@ -487,6 +497,13 @@ def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str,
     Returns:
         Dictionary with analysis results and statistics
     """
+    global _shutdown_requested
+    _shutdown_requested = False
+    
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, 'SIGTERM'):  # Windows doesn't have SIGTERM
+        signal.signal(signal.SIGTERM, signal_handler)
     
     logger.info(f"Starting Telegram batch analysis (limit: {limit})")
     
@@ -549,6 +566,13 @@ def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str,
     }
     
     for link in telegram_links:
+        # Check for shutdown signal
+        if _shutdown_requested:
+            logger.warning("Shutdown requested, stopping batch analysis gracefully")
+            results['skipped'] = len(telegram_links) - results['analyzed'] - results['failed']
+            results['shutdown_requested'] = True
+            break
+            
         link_id, telegram_url, project_name, project_code = link
         
         # Check if we can still make API calls
@@ -582,6 +606,11 @@ def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str,
                 })
                 logger.error(f"❌ Analysis failed for {project_name}")
                 
+        except KeyboardInterrupt:
+            logger.warning("KeyboardInterrupt received during analysis; stopping gracefully after current item")
+            results['skipped'] = len(telegram_links) - results['analyzed'] - results['failed']
+            results['shutdown_requested'] = True
+            break
         except Exception as e:
             results['failed'] += 1
             logger.error(f"❌ Exception analyzing {project_name}: {e}")
@@ -614,49 +643,61 @@ def analyze_telegram_link_batch(database_url: str, limit: int = 10) -> Dict[str,
 def main():
     """Test the Telegram analyzer."""
     
-    # Initialize database
-    database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')
+    try:
+        # Initialize database
+        database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/crypto_analytics.db')
+        
+        if len(sys.argv) > 1 and sys.argv[1] == 'batch':
+            # Run batch analysis
+            limit = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+            results = analyze_telegram_link_batch(database_url, limit)
+            
+            print("\n=== Batch Analysis Results ===")
+            print(f"Analyzed: {results['analyzed']}")
+            print(f"Failed: {results['failed']}")
+            print(f"API calls used: {results['api_calls_used']}")
+            if results.get('shutdown_requested'):
+                print("Analysis stopped due to user interruption")
+            
+        else:
+            # Test single analysis
+            db_manager = DatabaseManager(database_url)
+            analyzer = TelegramContentAnalyzer(db_manager)
+            
+            # Test with a known crypto project Telegram
+            test_url = "https://t.me/ethereum"
+            analysis = analyzer.analyze_telegram_link(1, test_url, "Ethereum")
+            
+            if analysis:
+                print(f"\n=== Analysis Results for @{analysis.channel_id} ===")
+                print(f"Channel: {analysis.channel_title}")
+                print(f"Type: {analysis.channel_type}")
+                print(f"Members: {analysis.member_count:,}")
+                print(f"Overall Score: {analysis.overall_score:.2f}/10")
+                print(f"Health Status: {analysis.health_status.title()}")
+                print(f"Confidence: {analysis.confidence_score:.2f}")
+                
+                if analysis.positive_indicators:
+                    print(f"\nPositive Indicators:")
+                    for indicator in analysis.positive_indicators[:5]:
+                        print(f"  ✅ {indicator}")
+                
+                if analysis.red_flags:
+                    print(f"\nRed Flags:")
+                    for flag in analysis.red_flags[:5]:
+                        print(f"  🚩 {flag}")
+            
+            stats = analyzer.get_usage_stats()
+            print(f"\nAPI Usage: {stats['minute_usage']}/{stats['minute_limit']} per minute ({stats['usage_percentage']:.1f}%)")
     
-    if len(sys.argv) > 1 and sys.argv[1] == 'batch':
-        # Run batch analysis
-        limit = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-        results = analyze_telegram_link_batch(database_url, limit)
-        
-        print("\n=== Batch Analysis Results ===")
-        print(f"Analyzed: {results['analyzed']}")
-        print(f"Failed: {results['failed']}")
-        print(f"API calls used: {results['api_calls_used']}")
-        
-    else:
-        # Test single analysis
-        db_manager = DatabaseManager(database_url)
-        analyzer = TelegramContentAnalyzer(db_manager)
-        
-        # Test with a known crypto project Telegram
-        test_url = "https://t.me/ethereum"
-        analysis = analyzer.analyze_telegram_link(1, test_url, "Ethereum")
-        
-        if analysis:
-            print(f"\n=== Analysis Results for @{analysis.channel_id} ===")
-            print(f"Channel: {analysis.channel_title}")
-            print(f"Type: {analysis.channel_type}")
-            print(f"Members: {analysis.member_count:,}")
-            print(f"Overall Score: {analysis.overall_score:.2f}/10")
-            print(f"Health Status: {analysis.health_status.title()}")
-            print(f"Confidence: {analysis.confidence_score:.2f}")
-            
-            if analysis.positive_indicators:
-                print(f"\nPositive Indicators:")
-                for indicator in analysis.positive_indicators[:5]:
-                    print(f"  ✅ {indicator}")
-            
-            if analysis.red_flags:
-                print(f"\nRed Flags:")
-                for flag in analysis.red_flags[:5]:
-                    print(f"  🚩 {flag}")
-        
-        stats = analyzer.get_usage_stats()
-        print(f"\nAPI Usage: {stats['minute_usage']}/{stats['minute_limit']} per minute ({stats['usage_percentage']:.1f}%)")
+    except KeyboardInterrupt:
+        logger.warning("Program interrupted by user")
+        print("\nProgram interrupted by user. Exiting gracefully...")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error in main: {e}")
+        print(f"\nError: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
