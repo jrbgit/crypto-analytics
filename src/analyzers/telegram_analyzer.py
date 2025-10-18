@@ -34,6 +34,13 @@ config_path = Path(__file__).parent.parent.parent / "config" / ".env"
 load_dotenv(config_path)
 
 
+class TelegramAnalyzerError(Exception):
+    """Custom exception for Telegram analyzer errors, including API issues."""
+    def __init__(self, error_code: int, error_message: str):
+        self.error_code = error_code
+        self.error_message = error_message
+        super().__init__(f"Telegram Analyzer Error {error_code}: {error_message}")
+
 @dataclass
 class TelegramContentAnalysis:
     """Comprehensive Telegram content analysis result for database storage."""
@@ -141,8 +148,9 @@ class TelegramContentAnalyzer:
             # Get channel analysis from API
             channel_analysis = self.api_client.analyze_channel_profile(telegram_url)
             if not channel_analysis:
-                logger.error(f"Failed to get channel analysis for @{channel_id}")
-                return None
+                # If analyze_channel_profile returns None, it implies a specific API error already handled (like 400 chat not found)
+                # We assume 400 for 'chat not found' given typical Telegram API responses.
+                raise TelegramAnalyzerError(400, "Chat not found - channel may be private, deleted, or username incorrect")
             
             # Calculate API calls used
             final_usage = self.api_client.get_usage_stats()
@@ -194,8 +202,9 @@ class TelegramContentAnalyzer:
             return analysis
             
         except Exception as e:
-            logger.error(f"Error during Telegram analysis for @{channel_id}: {e}")
-            return None
+            logger.error(f"Unexpected error during Telegram analysis for @{channel_id}: {e}")
+            # Wrap any other exceptions in TelegramAnalyzerError for consistent handling
+            raise TelegramAnalyzerError(500, f"Unexpected analysis error: {e}") from e
     
     def _calculate_data_quality_score(self, channel_data: Dict) -> float:
         """Calculate how complete and reliable the channel data is (0-1)."""
@@ -424,25 +433,29 @@ class TelegramContentAnalyzer:
             return True  # Return True to continue batch processing
         
         # Perform analysis
-        analysis = self.analyze_telegram_link(link_id, telegram_url, project_name)
-        if not analysis:
-            # Analysis failed - this is likely a 400 "chat not found" error
-            # Store error result without making additional API calls
-            logger.info(f"Channel @{channel_id} analysis failed - likely not found or inaccessible")
-            self.store_error_result(link_id, telegram_url, 400, "Chat not found - channel may be private, deleted, or username incorrect")
-            self._update_link_status(link_id, False, "Channel not found")
-            return True  # Return True to continue batch processing
+        try:
+            analysis = self.analyze_telegram_link(link_id, telegram_url, project_name)
+            
+            # Store results
+            if not self.store_analysis_result(link_id, analysis):
+                logger.error(f"Failed to store Telegram analysis results for link ID {link_id}")
+                return False
+            
+            # Update the project link to mark it as analyzed successfully
+            self._update_link_status(link_id, True, "Analysis completed successfully")
+            return True
+            
+        except TelegramAnalyzerError as tae:
+            logger.info(f"Channel @{channel_id} analysis failed with API error {tae.error_code}: {tae.error_message}")
+            self.store_error_result(link_id, telegram_url, tae.error_code, tae.error_message)
+            self._update_link_status(link_id, False, tae.error_message)
+            return True  # Return True to continue batch processing for other links
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during analysis for @{channel_id}: {e}")
+            self.store_error_result(link_id, telegram_url, 500, f"Unexpected error: {e}")
+            self._update_link_status(link_id, False, "Unexpected error during analysis")
+            return True # Return True to continue batch processing for other links
         
-        # Store results
-        if not self.store_analysis_result(link_id, analysis):
-            logger.error(f"Failed to store Telegram analysis results for link ID {link_id}")
-            return False
-        
-        # Update the project link to mark it as analyzed successfully
-        self._update_link_status(link_id, True, "Analysis completed successfully")
-        
-        logger.success(f"Complete Telegram analysis workflow finished for link ID {link_id}")
-        return True
     
     def _update_link_status(self, link_id: int, success: bool, status_message: str = None):
         """
