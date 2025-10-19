@@ -27,6 +27,7 @@ import openai
 from anthropic import Anthropic
 import requests
 import json as json_lib
+from models.database import DatabaseManager, APIUsage
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -96,7 +97,7 @@ class MediumAnalysis:
 class MediumContentAnalyzer:
     """LLM-powered Medium content analyzer for cryptocurrency projects."""
     
-    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434", db_manager: DatabaseManager = None):
         """
         Initialize the analyzer.
         
@@ -104,10 +105,12 @@ class MediumContentAnalyzer:
             provider: "anthropic", "openai", or "ollama"
             model: Model to use for analysis
             ollama_base_url: Base URL for Ollama server
+            db_manager: Database manager for usage tracking
         """
         self.provider = provider
         self.model = model
         self.ollama_base_url = ollama_base_url
+        self.db_manager = db_manager
         
         # Initialize clients
         if provider == "anthropic":
@@ -260,11 +263,13 @@ Publication data to analyze:
             return None
     
     def _call_ollama(self, content: str) -> Dict[str, Any]:
-        """Make API call to Ollama."""
+        """Make API call to Ollama with usage tracking."""
+        start_time = time.time()
         try:
+            full_prompt = self.analysis_prompt + "\n\n" + content + "\n\nIMPORTANT: Respond ONLY with valid JSON, no additional text or explanation."
             payload = {
                 "model": self.model,
-                "prompt": self.analysis_prompt + "\n\n" + content + "\n\nIMPORTANT: Respond ONLY with valid JSON, no additional text or explanation.",
+                "prompt": full_prompt,
                 "stream": False,
                 "options": {
                     "temperature": 0.1,
@@ -279,12 +284,54 @@ Publication data to analyze:
                 timeout=150  # Longer timeout for complex analysis
             )
             
+            response_time = time.time() - start_time
+            
             if response.status_code != 200:
+                # Log failed request
+                if self.db_manager:
+                    try:
+                        with self.db_manager.get_session() as session:
+                            self.db_manager.log_api_usage(
+                                session=session,
+                                provider='ollama',
+                                endpoint=f'{self.model}/generate',
+                                status=response.status_code,
+                                response_size=0,
+                                response_time=response_time,
+                                credits_used=0,
+                                error_message=f"HTTP {response.status_code}: {response.text[:200]}"
+                            )
+                            session.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to log Ollama error: {e}")
+                
                 logger.error(f"Ollama API returned {response.status_code}: {response.text}")
                 return self._create_fallback_analysis()
             
             response_data = response.json()
             response_text = response_data.get('response', '').strip()
+            
+            # Estimate token usage and log successful request
+            if self.db_manager:
+                try:
+                    prompt_tokens = len(full_prompt.split()) // 0.75
+                    response_tokens = len(response_text.split()) // 0.75 if response_text else 0
+                    estimated_tokens = int(prompt_tokens + response_tokens)
+                    
+                    with self.db_manager.get_session() as session:
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=response.status_code,
+                            response_size=estimated_tokens,
+                            response_time=response_time,
+                            credits_used=1
+                        )
+                        session.commit()
+                        logger.debug(f"Ollama medium usage: {estimated_tokens} tokens, {response_time:.2f}s")
+                except Exception as e:
+                    logger.warning(f"Failed to log Ollama usage: {e}")
             
             # Log raw response for debugging
             logger.debug(f"Raw Ollama response: {response_text[:200]}...")
@@ -312,6 +359,24 @@ Publication data to analyze:
                 return self._try_fix_json(json_str)
             
         except requests.exceptions.RequestException as e:
+            response_time = time.time() - start_time
+            if self.db_manager:
+                try:
+                    with self.db_manager.get_session() as session:
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=0,
+                            response_size=0,
+                            response_time=response_time,
+                            credits_used=0,
+                            error_message=str(e)
+                        )
+                        session.commit()
+                except Exception as log_error:
+                    logger.warning(f"Failed to log Ollama request error: {log_error}")
+            
             logger.error(f"Ollama API request failed: {e}")
             return self._create_fallback_analysis()
         except Exception as e:

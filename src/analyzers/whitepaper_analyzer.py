@@ -27,6 +27,7 @@ import openai
 from anthropic import Anthropic
 import requests
 import json as json_lib
+from models.database import DatabaseManager, APIUsage
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -93,7 +94,7 @@ class WhitepaperAnalysis:
 class WhitepaperContentAnalyzer:
     """LLM-powered whitepaper content analyzer for cryptocurrency projects."""
     
-    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434", db_manager: DatabaseManager = None):
         """
         Initialize the analyzer.
         
@@ -101,10 +102,12 @@ class WhitepaperContentAnalyzer:
             provider: "anthropic", "openai", or "ollama"
             model: Model to use for analysis
             ollama_base_url: Base URL for Ollama server
+            db_manager: Database manager for usage tracking
         """
         self.provider = provider
         self.model = model
         self.ollama_base_url = ollama_base_url
+        self.db_manager = db_manager
         
         # Initialize clients
         if provider == "anthropic":
@@ -277,12 +280,14 @@ Content to analyze:
             return None
     
     def _call_ollama(self, content: str) -> Dict[str, Any]:
-        """Make API call to Ollama server."""
+        """Make API call to Ollama server with enhanced usage tracking."""
+        start_time = time.time()
         try:
             # Prepare the request payload
+            full_prompt = self.analysis_prompt + "\n\n" + content
             payload = {
                 "model": self.model,
-                "prompt": self.analysis_prompt + "\n\n" + content,
+                "prompt": full_prompt,
                 "stream": False,
                 "format": "json",
                 "options": {
@@ -301,7 +306,31 @@ Content to analyze:
             response.raise_for_status()
             
             result = response.json()
+            response_time = time.time() - start_time
             response_text = result.get('response', '')
+            
+            # Estimate token usage (rough approximation: ~0.75 words per token)
+            prompt_tokens = len(full_prompt.split()) // 0.75
+            response_tokens = len(response_text.split()) // 0.75 if response_text else 0
+            estimated_tokens = int(prompt_tokens + response_tokens)
+            
+            # Log API usage if db_manager is available
+            if self.db_manager:
+                try:
+                    with self.db_manager.get_session() as session:
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=response.status_code,
+                            response_size=estimated_tokens,
+                            response_time=response_time,
+                            credits_used=1
+                        )
+                        session.commit()
+                        logger.debug(f"Ollama whitepaper usage: {estimated_tokens} tokens, {response_time:.2f}s response time")
+                except Exception as e:
+                    logger.warning(f"Failed to log Ollama API usage: {e}")
             
             # Try to parse the JSON response
             if response_text.strip():
@@ -330,13 +359,34 @@ Content to analyze:
                 return None
                 
         except requests.exceptions.RequestException as e:
+            response_time = time.time() - start_time
+            # Log failed request
+            if self.db_manager:
+                try:
+                    with self.db_manager.get_session() as session:
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=0,
+                            response_size=0,
+                            response_time=response_time,
+                            credits_used=0,
+                            error_message=str(e)
+                        )
+                        session.commit()
+                except Exception as log_error:
+                    logger.warning(f"Failed to log Ollama request error: {log_error}")
+            
             logger.error(f"Ollama API request failed: {e}")
             return None
         except json_lib.JSONDecodeError as e:
+            response_time = time.time() - start_time
             logger.error(f"Failed to parse Ollama response as JSON: {e}")
             logger.debug(f"Raw response: {response_text[:500]}...")
             return None
         except Exception as e:
+            response_time = time.time() - start_time
             logger.error(f"Ollama API call failed: {e}")
             return None
     

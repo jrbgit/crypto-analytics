@@ -123,22 +123,26 @@ class ContentAnalysisPipeline:
         self.website_analyzer = WebsiteContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
-            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434'),
+            db_manager=db_manager
         )
         self.whitepaper_analyzer = WhitepaperContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
-            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434'),
+            db_manager=db_manager
         )
         self.medium_analyzer = MediumContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
-            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434'),
+            db_manager=db_manager
         )
         self.reddit_analyzer = RedditContentAnalyzer(
             provider=analyzer_config.get('provider', 'ollama'),
             model=analyzer_config.get('model', 'llama3.1:latest'),
-            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434')
+            ollama_base_url=analyzer_config.get('ollama_base_url', 'http://localhost:11434'),
+            db_manager=db_manager
         )
         self.youtube_analyzer = YouTubeAnalyzer()
         
@@ -773,40 +777,24 @@ class ContentAnalysisPipeline:
             return analysis_record
     
     def _log_website_analysis_usage(self, website_analysis: WebsiteAnalysis):
-        """Log website LLM API usage for cost tracking."""
-        with self.db_manager.get_session() as session:
-            # Estimate token usage (rough calculation)
-            estimated_tokens = int(website_analysis.total_word_count // 0.75)  # ~0.75 words per token
-            
-            usage = APIUsage(
-                api_provider=self.website_analyzer.provider,
-                endpoint='website_analysis',
-                response_status=200,
-                credits_used=1,
-                response_size=estimated_tokens,
-                response_time=0.0  # We don't track this currently
-            )
-            
-            session.add(usage)
-            session.commit()
+        """Website LLM API usage is now tracked automatically in the analyzer.
+        
+        This method is kept for backward compatibility but no longer creates 
+        duplicate usage records since the analyzers now track usage directly.
+        """
+        # Usage is now tracked automatically in WebsiteContentAnalyzer._call_ollama()
+        # when db_manager is available, including actual response times and token counts
+        logger.debug(f"Website analysis usage tracked automatically for {website_analysis.model_used}")
     
     def _log_whitepaper_analysis_usage(self, whitepaper_analysis: WhitepaperAnalysis):
-        """Log whitepaper LLM API usage for cost tracking."""
-        with self.db_manager.get_session() as session:
-            # Estimate token usage (rough calculation)
-            estimated_tokens = int(whitepaper_analysis.word_count // 0.75)  # ~0.75 words per token
-            
-            usage = APIUsage(
-                api_provider=self.whitepaper_analyzer.provider,
-                endpoint='whitepaper_analysis',
-                response_status=200,
-                credits_used=1,
-                response_size=estimated_tokens,
-                response_time=0.0  # We don't track this currently
-            )
-            
-            session.add(usage)
-            session.commit()
+        """Whitepaper LLM API usage is now tracked automatically in the analyzer.
+        
+        This method is kept for backward compatibility but no longer creates 
+        duplicate usage records since the analyzers now track usage directly.
+        """
+        # Usage is now tracked automatically in WhitepaperContentAnalyzer._call_ollama()
+        # when db_manager is available, including actual response times and token counts
+        logger.debug(f"Whitepaper analysis usage tracked automatically for {whitepaper_analysis.model_used}")
     
     def _store_medium_analysis_results(self,
                                      medium_link: ProjectLink,
@@ -956,22 +944,14 @@ class ContentAnalysisPipeline:
             return analysis_record
     
     def _log_medium_analysis_usage(self, medium_analysis: MediumAnalysis):
-        """Log Medium LLM API usage for cost tracking."""
-        with self.db_manager.get_session() as session:
-            # Estimate token usage based on articles analyzed
-            estimated_tokens = medium_analysis.articles_with_detailed_analysis * 1500  # Rough estimate per detailed article
-            
-            usage = APIUsage(
-                api_provider=self.medium_analyzer.provider,
-                endpoint='medium_analysis',
-                response_status=200,
-                credits_used=1,
-                response_size=estimated_tokens,
-                response_time=0.0  # We don't track this currently
-            )
-            
-            session.add(usage)
-            session.commit()
+        """Medium LLM API usage is now tracked automatically in the analyzer.
+        
+        This method is kept for backward compatibility but no longer creates 
+        duplicate usage records since the analyzers now track usage directly.
+        """
+        # Usage is now tracked automatically in MediumContentAnalyzer._call_ollama()
+        # when db_manager is available, including actual response times and token counts
+        logger.debug(f"Medium analysis usage tracked automatically for {medium_analysis.model_used}")
     
     def _store_reddit_analysis_results(self,
                                      reddit_link: ProjectLink,

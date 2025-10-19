@@ -26,6 +26,7 @@ import openai
 from anthropic import Anthropic
 import requests
 import json as json_lib
+from models.database import DatabaseManager, APIUsage
 
 # Load environment variables
 config_path = Path(__file__).parent.parent.parent / "config" / "env"
@@ -80,7 +81,7 @@ class WebsiteAnalysis:
 class WebsiteContentAnalyzer:
     """LLM-powered website content analyzer for cryptocurrency projects."""
     
-    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434", db_manager: DatabaseManager = None):
         """
         Initialize the analyzer.
         
@@ -88,10 +89,12 @@ class WebsiteContentAnalyzer:
             provider: "anthropic", "openai", or "ollama"
             model: Model to use for analysis
             ollama_base_url: Base URL for Ollama server
+            db_manager: Database manager for usage tracking
         """
         self.provider = provider
         self.model = model
         self.ollama_base_url = ollama_base_url
+        self.db_manager = db_manager
         
         # Initialize clients
         if provider == "anthropic":
@@ -240,11 +243,13 @@ Content to analyze:
         """Make API call to Ollama server with retry logic and enhanced error handling."""
         
         for attempt in range(max_retries + 1):
+            start_time = time.time()
             try:
                 # Prepare the request payload
+                full_prompt = self.analysis_prompt + "\n\n" + content
                 payload = {
                     "model": self.model,
-                    "prompt": self.analysis_prompt + "\n\n" + content,
+                    "prompt": full_prompt,
                     "stream": False,
                     "format": "json",
                     "options": {
@@ -267,6 +272,30 @@ Content to analyze:
                 response.raise_for_status()
                 
                 result = response.json()
+                response_time = time.time() - start_time
+                
+                # Estimate token usage (rough approximation: ~0.75 words per token)
+                prompt_tokens = len(full_prompt.split()) // 0.75
+                response_text = result.get('response', '')
+                response_tokens = len(response_text.split()) // 0.75 if response_text else 0
+                estimated_tokens = int(prompt_tokens + response_tokens)
+                
+                # Log API usage if db_manager is available
+                if self.db_manager:
+                    try:
+                        with self.db_manager.get_session() as session:
+                            self.db_manager.log_api_usage(
+                                session=session,
+                                provider='ollama',
+                                endpoint=f'{self.model}/generate',
+                                status=response.status_code,
+                                response_size=estimated_tokens,
+                                response_time=response_time,
+                                credits_used=1
+                            )
+                            session.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to log Ollama API usage: {e}")
                 
                 # Check for Ollama-specific error responses
                 if 'error' in result:
@@ -287,13 +316,12 @@ Content to analyze:
                         logger.error(f"Ollama API error: {error_msg}")
                         return None
                 
-                response_text = result.get('response', '')
-                
                 # Enhanced JSON extraction with multiple strategies
                 parsed_json = self._extract_json_from_response(response_text, "Ollama")
                 if parsed_json:
                     if attempt > 0:
                         logger.info(f"Ollama API call succeeded on attempt {attempt + 1}")
+                    logger.debug(f"Ollama usage: {estimated_tokens} tokens, {response_time:.2f}s response time")
                     return parsed_json
                 else:
                     if attempt < max_retries:
@@ -305,8 +333,27 @@ Content to analyze:
                         return None
                         
             except requests.exceptions.ConnectionError as e:
+                response_time = time.time() - start_time
+                # Log failed connection attempt
+                if self.db_manager:
+                    try:
+                        with self.db_manager.get_session() as session:
+                            self.db_manager.log_api_usage(
+                                session=session,
+                                provider='ollama',
+                                endpoint=f'{self.model}/generate',
+                                status=0,  # Connection failed
+                                response_size=0,
+                                response_time=response_time,
+                                credits_used=0,
+                                error_message=str(e)
+                            )
+                            session.commit()
+                    except Exception as log_error:
+                        logger.warning(f"Failed to log Ollama connection error: {log_error}")
+                
                 if 'connection refused' in str(e).lower():
-                    logger.error("Ollama server not running or not accessible. Please ensure Ollama is running on {self.ollama_base_url}")
+                    logger.error(f"Ollama server not running or not accessible. Please ensure Ollama is running on {self.ollama_base_url}")
                     return None  # Don't retry connection refused
                 elif attempt < max_retries:
                     wait_time = (2 ** attempt) * 1
@@ -318,6 +365,25 @@ Content to analyze:
                     return None
                     
             except requests.exceptions.Timeout as e:
+                response_time = time.time() - start_time
+                # Log timeout attempt
+                if self.db_manager:
+                    try:
+                        with self.db_manager.get_session() as session:
+                            self.db_manager.log_api_usage(
+                                session=session,
+                                provider='ollama',
+                                endpoint=f'{self.model}/generate',
+                                status=408,  # Request timeout
+                                response_size=0,
+                                response_time=response_time,
+                                credits_used=0,
+                                error_message=f"Timeout after {response_time:.1f}s"
+                            )
+                            session.commit()
+                    except Exception as log_error:
+                        logger.warning(f"Failed to log Ollama timeout: {log_error}")
+                
                 if attempt < max_retries:
                     timeout_increase = (attempt + 1) * 30
                     logger.warning(f"Ollama API timeout on attempt {attempt + 1}, retrying with longer timeout (+{timeout_increase}s)")
