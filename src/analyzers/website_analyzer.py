@@ -284,15 +284,15 @@ Content to analyze:
                 if self.db_manager:
                     try:
                         with self.db_manager.get_session() as session:
-                            self.db_manager.log_api_usage(
-                                session=session,
-                                provider='ollama',
-                                endpoint=f'{self.model}/generate',
-                                status=response.status_code,
-                                response_size=estimated_tokens,
-                                response_time=response_time,
-                                credits_used=1
-                            )
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=response.status_code,
+                            credits=1,
+                            response_size=estimated_tokens,
+                            response_time=response_time
+                        )
                             session.commit()
                     except Exception as e:
                         logger.warning(f"Failed to log Ollama API usage: {e}")
@@ -338,16 +338,16 @@ Content to analyze:
                 if self.db_manager:
                     try:
                         with self.db_manager.get_session() as session:
-                            self.db_manager.log_api_usage(
-                                session=session,
-                                provider='ollama',
-                                endpoint=f'{self.model}/generate',
-                                status=0,  # Connection failed
-                                response_size=0,
-                                response_time=response_time,
-                                credits_used=0,
-                                error_message=str(e)
-                            )
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=0,  # Connection failed
+                            credits=0,
+                            response_size=0,
+                            response_time=response_time,
+                            error_message=str(e)
+                        )
                             session.commit()
                     except Exception as log_error:
                         logger.warning(f"Failed to log Ollama connection error: {log_error}")
@@ -370,16 +370,16 @@ Content to analyze:
                 if self.db_manager:
                     try:
                         with self.db_manager.get_session() as session:
-                            self.db_manager.log_api_usage(
-                                session=session,
-                                provider='ollama',
-                                endpoint=f'{self.model}/generate',
-                                status=408,  # Request timeout
-                                response_size=0,
-                                response_time=response_time,
-                                credits_used=0,
-                                error_message=f"Timeout after {response_time:.1f}s"
-                            )
+                        self.db_manager.log_api_usage(
+                            session=session,
+                            provider='ollama',
+                            endpoint=f'{self.model}/generate',
+                            status=408,  # Request timeout
+                            credits=0,
+                            response_size=0,
+                            response_time=response_time,
+                            error_message=f"Timeout after {response_time:.1f}s"
+                        )
                             session.commit()
                     except Exception as log_error:
                         logger.warning(f"Failed to log Ollama timeout: {log_error}")

@@ -317,9 +317,9 @@ Reddit community data to analyze:
                                 provider='ollama',
                                 endpoint=f'{self.model}/generate',
                                 status=response.status_code,
+                                credits=0,
                                 response_size=0,
                                 response_time=response_time,
-                                credits_used=0,
                                 error_message=f"HTTP {response.status_code}: {response.text[:200]}"
                             )
                             session.commit()
@@ -345,9 +345,9 @@ Reddit community data to analyze:
                             provider='ollama',
                             endpoint=f'{self.model}/generate',
                             status=response.status_code,
+                            credits=1,
                             response_size=estimated_tokens,
-                            response_time=response_time,
-                            credits_used=1
+                            response_time=response_time
                         )
                         session.commit()
                         logger.debug(f"Ollama reddit usage: {estimated_tokens} tokens, {response_time:.2f}s")
@@ -392,9 +392,9 @@ Reddit community data to analyze:
                             provider='ollama',
                             endpoint=f'{self.model}/generate',
                             status=0,
+                            credits=0,
                             response_size=0,
                             response_time=response_time,
-                            credits_used=0,
                             error_message=str(e)
                         )
                         session.commit()
