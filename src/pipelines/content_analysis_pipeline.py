@@ -149,6 +149,26 @@ class ContentAnalysisPipeline:
         # Analysis settings
         self.max_projects_per_run = 10  # Limit for cost control
         self.min_analysis_interval = timedelta(days=7)  # Minimum time between re-analysis
+    
+    def _ensure_integer_score(self, value, field_name: str, default: int = 5, min_val: int = 1, max_val: int = 10) -> int:
+        """Ensure a value is an integer score between min_val and max_val."""
+        if isinstance(value, str):
+            # Try to extract a number from the string
+            import re
+            match = re.search(r'\b([1-9]|10)\b', value)
+            if match:
+                score = int(match.group(1))
+                logger.warning(f"Converted string value to integer for {field_name}: '{value[:50]}...' -> {score}")
+                return score
+            else:
+                logger.warning(f"Could not extract score from string for {field_name}: '{value[:100]}...', using default: {default}")
+                return default
+        elif isinstance(value, (int, float)):
+            score = int(value)
+            return max(min_val, min(max_val, score))  # Clamp to range
+        else:
+            logger.warning(f"Unexpected data type for {field_name}: {type(value)}, using default: {default}")
+            return default
         
     def discover_projects_for_analysis(self, link_types: List[str] = None, limit: int = None) -> List[Tuple[CryptoProject, ProjectLink]]:
         """
@@ -788,7 +808,7 @@ class ContentAnalysisPipeline:
                 # Technical innovation
                 innovations=whitepaper_analysis.innovations_claimed,
                 technical_innovations_score=whitepaper_analysis.technical_innovations_score,
-                implementation_details_score=whitepaper_analysis.implementation_details,
+                implementation_details_score=self._ensure_integer_score(whitepaper_analysis.implementation_details, 'implementation_details'),
                 
                 # Competitive analysis
                 has_competitive_analysis=whitepaper_analysis.has_competitive_analysis,

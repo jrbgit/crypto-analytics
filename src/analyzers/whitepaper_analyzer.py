@@ -430,25 +430,43 @@ Content to analyze:
             return None
         
         try:
+            # Helper function to ensure integer scores
+            def ensure_int_score(value, default=5, min_val=1, max_val=10):
+                """Ensure a value is an integer score between min_val and max_val."""
+                if isinstance(value, str):
+                    # Try to extract a number from the string
+                    import re
+                    match = re.search(r'\b([1-9]|10)\b', value)
+                    if match:
+                        return int(match.group(1))
+                    else:
+                        logger.warning(f"Could not extract score from string: {value[:100]}...")
+                        return default
+                elif isinstance(value, (int, float)):
+                    score = int(value)
+                    return max(min_val, min(max_val, score))  # Clamp to range
+                else:
+                    return default
+            
             # Create WhitepaperAnalysis object from the response
             analysis = WhitepaperAnalysis(
-                technical_depth_score=raw_analysis.get('technical_depth_score', 5),
-                content_quality_score=raw_analysis.get('content_quality_score', 5),
-                document_structure_score=raw_analysis.get('document_structure_score', 5),
+                technical_depth_score=ensure_int_score(raw_analysis.get('technical_depth_score', 5)),
+                content_quality_score=ensure_int_score(raw_analysis.get('content_quality_score', 5)),
+                document_structure_score=ensure_int_score(raw_analysis.get('document_structure_score', 5)),
                 
                 has_tokenomics=raw_analysis.get('has_tokenomics', False),
                 tokenomics_summary=raw_analysis.get('tokenomics_summary'),
                 token_distribution_described=raw_analysis.get('token_distribution_described', False),
-                economic_model_clarity=raw_analysis.get('economic_model_clarity', 5),
+                economic_model_clarity=ensure_int_score(raw_analysis.get('economic_model_clarity', 5)),
                 
                 use_cases_described=raw_analysis.get('use_cases_described', []),
-                use_case_viability_score=raw_analysis.get('use_case_viability_score', 5),
+                use_case_viability_score=ensure_int_score(raw_analysis.get('use_case_viability_score', 5)),
                 target_market_defined=raw_analysis.get('target_market_defined', False),
                 unique_value_proposition=raw_analysis.get('unique_value_proposition'),
                 
                 innovations_claimed=raw_analysis.get('innovations_claimed', []),
-                technical_innovations_score=raw_analysis.get('technical_innovations_score', 5),
-                implementation_details=raw_analysis.get('implementation_details', 5),
+                technical_innovations_score=ensure_int_score(raw_analysis.get('technical_innovations_score', 5)),
+                implementation_details=ensure_int_score(raw_analysis.get('implementation_details', 5)),
                 
                 has_competitive_analysis=raw_analysis.get('has_competitive_analysis', False),
                 competitors_mentioned=raw_analysis.get('competitors_mentioned', []),
@@ -457,7 +475,7 @@ Content to analyze:
                 team_described=raw_analysis.get('team_described', False),
                 team_expertise_apparent=raw_analysis.get('team_expertise_apparent', False),
                 development_roadmap_present=raw_analysis.get('development_roadmap_present', False),
-                roadmap_specificity=raw_analysis.get('roadmap_specificity', 5),
+                roadmap_specificity=ensure_int_score(raw_analysis.get('roadmap_specificity', 5)),
                 
                 red_flags=raw_analysis.get('red_flags', []),
                 plagiarism_indicators=raw_analysis.get('plagiarism_indicators', []),
