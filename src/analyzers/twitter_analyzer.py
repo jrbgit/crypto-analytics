@@ -550,9 +550,12 @@ def main():
         results = analyze_twitter_link_batch(database_url, limit)
         
         print("\n=== Batch Analysis Results ===")
-        print(f"Analyzed: {results['analyzed']}")
-        print(f"Failed: {results['failed']}")
-        print(f"API calls used: {results['api_calls_used']}")
+        if not results.get('success', True) and 'error' in results:
+            print(f"Error: {results['error']}")
+        else:
+            print(f"Analyzed: {results.get('analyzed', 0)}")
+            print(f"Failed: {results.get('failed', 0)}")
+            print(f"API calls used: {results.get('api_calls_used', 0)}")
         
     else:
         # Test single analysis

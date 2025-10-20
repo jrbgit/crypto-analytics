@@ -213,9 +213,12 @@ def validate_and_process_args(args):
     
     return enabled_types, custom_batch_sizes
 
-def run_analysis_batch(content_type, pipeline, batch_size):
+def run_analysis_batch(content_type, pipeline, batch_size, processed_in_session=None):
     """Run analysis for a specific content type with interrupt handling."""
     global interrupt_requested, analysis_state
+    
+    if processed_in_session is None:
+        processed_in_session = set()
     
     if interrupt_requested:
         print(f"\n⏭️  Skipping {content_type} analysis due to interrupt request")
@@ -224,12 +227,21 @@ def run_analysis_batch(content_type, pipeline, batch_size):
     print(f"\n{'='*20} {content_type.upper()} ANALYSIS {'='*20}")
     analysis_state['current_content_type'] = content_type
     
-    # Check how many items need analysis
-    projects = pipeline.discover_projects_for_analysis(link_types=[content_type])
-    print(f"Found {len(projects)} {content_type} items ready for analysis")
+    # Check how many items need analysis (excluding those processed in this session)
+    all_projects = pipeline.discover_projects_for_analysis(link_types=[content_type])
+    
+    # Filter out projects already processed in this session
+    projects = [(project, link) for project, link in all_projects 
+                if link.id not in processed_in_session]
+    
+    print(f"Found {len(all_projects)} {content_type} items ready for analysis")
+    if len(all_projects) != len(projects):
+        excluded_count = len(all_projects) - len(projects)
+        print(f"Excluding {excluded_count} items already processed in this session")
+        print(f"Remaining {content_type} items to process: {len(projects)}")
     
     if len(projects) == 0:
-        print(f"No {content_type} items need analysis at this time.")
+        print(f"No new {content_type} items need analysis at this time.")
         analysis_state['completed_content_types'].append(content_type)
         return None
     
@@ -237,12 +249,21 @@ def run_analysis_batch(content_type, pipeline, batch_size):
         print(f"\n⏭️  Interrupt received, skipping {content_type} processing")
         return None
     
-    print(f"Processing first {batch_size} {content_type} items...")
+    # Limit to batch size
+    projects_to_process = projects[:batch_size]
+    print(f"Processing {len(projects_to_process)} {content_type} items...")
     
     try:
-        # Run the analysis
-        stats = pipeline.run_analysis_batch(link_types=[content_type], max_projects=batch_size)
+        # Run the analysis with custom project list to avoid re-discovery
+        stats = pipeline.run_analysis_batch_with_projects(
+            projects_to_process, 
+            link_types=[content_type]
+        )
         analysis_state['current_batch_stats'] = stats
+        
+        # Track processed projects
+        for project, link in projects_to_process:
+            processed_in_session.add(link.id)
         
     except KeyboardInterrupt:
         print(f"\n⚠️  Keyboard interrupt during {content_type} analysis")
@@ -375,6 +396,9 @@ def main():
         'projects_found': 0
     })
     
+    # Track processed projects within this session to prevent immediate retries
+    processed_in_session = set()
+    
     try:
         # Process each content type
         for content_type, batch_size in batch_configs:
@@ -387,7 +411,7 @@ def main():
                 print(f"\n⏹️  Stopping before {content_type} analysis due to interrupt")
                 break
                 
-            stats = run_analysis_batch(content_type, pipeline, batch_size)
+            stats = run_analysis_batch(content_type, pipeline, batch_size, processed_in_session)
             
             if stats:
                 total_stats['successful_analyses'] += stats.get('successful_analyses', 0)

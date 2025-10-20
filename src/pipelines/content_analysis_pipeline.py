@@ -179,6 +179,54 @@ class ContentAnalysisPipeline:
                 )
             )
             
+            # Implement exponential backoff for failed projects to prevent immediate retries
+            now = datetime.now(UTC)
+            
+            # Define retry delays based on consecutive failure count:
+            # 0 failures: retry immediately
+            # 1 failure: wait 1 hour
+            # 2 failures: wait 6 hours  
+            # 3 failures: wait 24 hours
+            # 4+ failures: wait 7 days
+            query = query.filter(
+                or_(
+                    ProjectLink.last_scraped.is_(None),  # Never attempted
+                    ProjectLink.scrape_success == True,   # Previously successful
+                    # Apply exponential backoff based on consecutive failures for whitepapers
+                    and_(
+                        ProjectLink.link_type == 'whitepaper',
+                        or_(
+                            and_(ProjectLink.whitepaper_consecutive_failures == 1, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=1)),
+                            and_(ProjectLink.whitepaper_consecutive_failures == 2, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=6)),
+                            and_(ProjectLink.whitepaper_consecutive_failures == 3, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=24)),
+                            and_(ProjectLink.whitepaper_consecutive_failures >= 4, 
+                                 ProjectLink.last_scraped < now - timedelta(days=7)),
+                            ProjectLink.whitepaper_consecutive_failures.is_(None),
+                            ProjectLink.whitepaper_consecutive_failures == 0
+                        )
+                    ),
+                    # Apply exponential backoff for general failures on other link types
+                    and_(
+                        ProjectLink.link_type != 'whitepaper',
+                        or_(
+                            and_(ProjectLink.consecutive_failures == 1, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=1)),
+                            and_(ProjectLink.consecutive_failures == 2, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=6)),
+                            and_(ProjectLink.consecutive_failures == 3, 
+                                 ProjectLink.last_scraped < now - timedelta(hours=24)),
+                            and_(ProjectLink.consecutive_failures >= 4, 
+                                 ProjectLink.last_scraped < now - timedelta(days=7)),
+                            ProjectLink.consecutive_failures.is_(None),
+                            ProjectLink.consecutive_failures == 0
+                        )
+                    )
+                )
+            )
+            
             # Prioritize by market cap (larger projects first) and exclude recently analyzed
             cutoff_time = datetime.now(UTC) - self.min_analysis_interval
             
@@ -199,7 +247,7 @@ class ContentAnalysisPipeline:
             
             results = query.all()
             
-            logger.info(f"Found {len(results)} projects ready for content analysis")
+            logger.info(f"Found {len(results)} projects ready for content analysis (excluding {len(link_types) if link_types else 'all'} link types with failures in last hour)")
             return results
     
     def analyze_content(self, project: CryptoProject, link: ProjectLink) -> Optional[LinkContentAnalysis]:
@@ -1411,17 +1459,50 @@ class ContentAnalysisPipeline:
             return analysis_record
     
     def _update_scrape_status(self, link: ProjectLink, success: bool, error: str = None):
-        """Update the scrape status for a project link with reduced log noise."""
+        """Update the scrape status for a project link with failure tracking and exponential backoff."""
         with self.db_manager.get_session() as session:
             link_obj = session.merge(link)
-            link_obj.last_scraped = datetime.now(UTC)
+            now = datetime.now(UTC)
+            link_obj.last_scraped = now
             link_obj.scrape_success = success
             link_obj.needs_analysis = False  # Mark as processed
             
-            # Reduced logging - status is now logged by specialized status loggers
+            # Update failure tracking for exponential backoff
             if success:
+                # Reset failure counters on success
+                if link_obj.link_type == 'whitepaper':
+                    link_obj.whitepaper_consecutive_failures = 0
+                    link_obj.whitepaper_first_failure_date = None
+                else:
+                    link_obj.consecutive_failures = 0
+                    link_obj.first_failure_date = None
+                    
                 logger.debug(f"Successfully processed {link_obj.url}")
             else:
+                # Increment failure counters
+                if link_obj.link_type == 'whitepaper':
+                    current_failures = link_obj.whitepaper_consecutive_failures or 0
+                    link_obj.whitepaper_consecutive_failures = current_failures + 1
+                    if link_obj.whitepaper_first_failure_date is None:
+                        link_obj.whitepaper_first_failure_date = now
+                else:
+                    current_failures = link_obj.consecutive_failures or 0
+                    link_obj.consecutive_failures = current_failures + 1
+                    if link_obj.first_failure_date is None:
+                        link_obj.first_failure_date = now
+                
+                # Calculate next retry time based on exponential backoff
+                failure_count = (link_obj.whitepaper_consecutive_failures if link_obj.link_type == 'whitepaper' 
+                               else link_obj.consecutive_failures) or 0
+                if failure_count == 1:
+                    next_retry = now + timedelta(hours=1)
+                elif failure_count == 2:
+                    next_retry = now + timedelta(hours=6)
+                elif failure_count == 3:
+                    next_retry = now + timedelta(hours=24)
+                else:
+                    next_retry = now + timedelta(days=7)
+                
                 # Only log actual errors, not expected conditions like 404, 403, robots.txt, etc.
                 error_lower = (error or '').lower()
                 expected_failures = [
@@ -1432,9 +1513,9 @@ class ContentAnalysisPipeline:
                     'no articles found', 'feed parsing failed', 'empty feed'
                 ]
                 if any(condition in error_lower for condition in expected_failures):
-                    logger.debug(f"Expected failure for {link_obj.url}: {error}")
+                    logger.debug(f"Expected failure #{failure_count} for {link_obj.url} (next retry: {next_retry.strftime('%Y-%m-%d %H:%M')}): {error}")
                 else:
-                    logger.warning(f"Processing failed for {link_obj.url}: {error}")
+                    logger.warning(f"Processing failed #{failure_count} for {link_obj.url} (next retry: {next_retry.strftime('%Y-%m-%d %H:%M')}): {error}")
             
             session.commit()
     
@@ -1518,6 +1599,80 @@ class ContentAnalysisPipeline:
         
         logger.info(f"Batch complete: {successful_analyses} successful, {failed_analyses} failed")
         logger.info(f"Breakdown: {websites_analyzed} websites, {whitepapers_analyzed} whitepapers, {medium_analyzed} medium publications, {reddit_analyzed} reddit communities, {youtube_analyzed} youtube channels")
+        return stats
+    
+    def run_analysis_batch_with_projects(self, projects_to_analyze: List[Tuple[CryptoProject, ProjectLink]], link_types: List[str] = None) -> Dict[str, int]:
+        """
+        Run a batch of content analyses using a pre-filtered list of projects.
+        
+        Args:
+            projects_to_analyze: List of (project, link) tuples to analyze
+            link_types: Types of links being analyzed (for statistics)
+            
+        Returns:
+            Dictionary with analysis statistics
+        """
+        if not projects_to_analyze:
+            logger.info("No projects provided for analysis")
+            return {
+                'projects_found': 0,
+                'successful_analyses': 0,
+                'failed_analyses': 0,
+                'websites_analyzed': 0,
+                'whitepapers_analyzed': 0,
+                'medium_analyzed': 0,
+                'reddit_analyzed': 0,
+                'youtube_analyzed': 0
+            }
+        
+        logger.info(f"Starting analysis of {len(projects_to_analyze)} pre-selected projects")
+        
+        # Process each project
+        successful_analyses = 0
+        failed_analyses = 0
+        websites_analyzed = 0
+        whitepapers_analyzed = 0
+        medium_analyzed = 0
+        reddit_analyzed = 0
+        youtube_analyzed = 0
+        
+        for i, (project, link) in enumerate(projects_to_analyze):
+            logger.info(f"Processing {i+1}/{len(projects_to_analyze)}: {project.name} ({link.link_type})")
+            
+            analysis_result = self.analyze_content(project, link)
+            
+            if analysis_result:
+                successful_analyses += 1
+                if link.link_type == 'website':
+                    websites_analyzed += 1
+                elif link.link_type == 'whitepaper':
+                    whitepapers_analyzed += 1
+                elif link.link_type == 'medium':
+                    medium_analyzed += 1
+                elif link.link_type == 'reddit':
+                    reddit_analyzed += 1
+                elif link.link_type == 'youtube':
+                    youtube_analyzed += 1
+            else:
+                failed_analyses += 1
+            
+            # Rate limiting between projects
+            if i < len(projects_to_analyze) - 1:
+                time.sleep(0.5)  # 0.5 seconds between projects
+        
+        # Summary
+        stats = {
+            'projects_found': len(projects_to_analyze),
+            'successful_analyses': successful_analyses,
+            'failed_analyses': failed_analyses,
+            'websites_analyzed': websites_analyzed,
+            'whitepapers_analyzed': whitepapers_analyzed,
+            'medium_analyzed': medium_analyzed,
+            'reddit_analyzed': reddit_analyzed,
+            'youtube_analyzed': youtube_analyzed
+        }
+        
+        logger.info(f"Batch complete: {successful_analyses} successful, {failed_analyses} failed")
         return stats
 
 
