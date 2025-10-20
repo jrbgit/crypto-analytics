@@ -178,3 +178,4 @@ tmp/
 .DS_Store
 Thumbs.db
 ehthumbs.db
+config/youtube_credentials.pickle
