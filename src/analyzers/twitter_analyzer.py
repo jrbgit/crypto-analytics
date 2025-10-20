@@ -405,7 +405,7 @@ def analyze_twitter_link_batch(database_url: str, limit: int = 10) -> Dict[str, 
     
     # Check initial usage
     initial_stats = analyzer.get_usage_stats()
-    logger.info(f"Initial API usage: Monthly {initial_stats['monthly_usage']}/{initial_stats['monthly_limit']}, Daily {initial_stats['daily_usage']}/{initial_stats['daily_limit']}")
+    logger.info(f"Initial API usage: Monthly {initial_stats['monthly_usage']}/{initial_stats['monthly_limit']}, Daily {initial_stats['daily_usage']}/{initial_stats['daily_allocation']}")
 
     # Determine effective limit considering daily and monthly remaining calls
     effective_limit = limit
