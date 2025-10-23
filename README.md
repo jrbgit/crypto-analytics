@@ -11,7 +11,7 @@ A comprehensive system for collecting, processing, storing, and analyzing crypto
 - **Change Tracking**: Historical tracking of all data changes with timestamp and source attribution
 
 ### Content Analysis
-- **LLM-Powered Analysis**: Automated analysis using OpenAI and Anthropic APIs
+- **LLM-Powered Analysis**: Automated analysis using Ollama (local LLM inference)
 - **Website Analysis**: Extract technology stack, use cases, competitive advantages
 - **Whitepaper Analysis**: Parse and analyze project whitepapers (PDF and web formats)
 - **Social Media Intelligence**: Reddit sentiment, Twitter activity, Telegram engagement
@@ -79,9 +79,9 @@ crypto-analytics/
 ### Prerequisites
 - Python 3.10+
 - Docker & Docker Compose (for database)
+- Ollama installed and running locally
 - API Keys for:
   - LiveCoinWatch
-  - OpenAI or Anthropic (for LLM analysis)
   - Twitter API (optional)
   - Reddit API (optional)
 
@@ -187,10 +187,12 @@ Create a `config/.env` file with:
 # Database
 DATABASE_URL=postgresql://crypto_user:password@localhost:5432/crypto_analytics
 
+# LLM Configuration
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama2  # or your preferred model
+
 # API Keys
 LIVECOINWATCH_API_KEY=your_api_key_here
-OPENAI_API_KEY=your_openai_key
-ANTHROPIC_API_KEY=your_anthropic_key
 
 # Optional: Social Media APIs
 TWITTER_API_KEY=your_twitter_key
@@ -277,5 +279,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - LiveCoinWatch for comprehensive crypto market data
-- OpenAI and Anthropic for LLM APIs
+- Ollama for local LLM inference capabilities
 - The cryptocurrency and open-source communities
