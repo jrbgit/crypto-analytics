@@ -239,9 +239,17 @@ python scripts/dev/setup.py     # Development setup
 
 Detailed documentation is available in the `docs/` directory:
 
+### Project Overview
+- `CryptoAnalyticsWithML_LLM.md`: Original project concept and vision
 - `project_spec.md`: Complete project specification
+- `Crypto_Data_Sources.md`: Comprehensive list of crypto data sources and APIs
+
+### Technical Documentation
 - `DATABASE_MIGRATION_GUIDE.md`: Database schema and migrations
 - `PERFORMANCE_ANALYSIS.md`: Performance optimization guide
+- `ANALYSIS_REPORT.md`: Analysis results and findings
+
+### API Integration Guides
 - `livecoinwatch_api.md`: LiveCoinWatch API documentation
 - `REDDIT_API_NOTES.md`: Reddit integration guide
 - `twitter_integration_guide.md`: Twitter API setup
