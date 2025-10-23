@@ -13,7 +13,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db_init:/docker-entrypoint-initdb.d
-      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
     ports:
       - "5432:5432"
     command: >
@@ -47,7 +46,7 @@ services:
     container_name: crypto_analytics_cache
     volumes:
       - redis_data:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
     ports:
       - "6379:6379"
     command: redis-server /usr/local/etc/redis/redis.conf
@@ -104,7 +103,7 @@ services:
       - "5050:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-      - ./pgadmin_servers.json:/pgadmin4/servers.json:ro
+      - ./config/pgadmin_servers.json:/pgadmin4/servers.json:ro
     depends_on:
       postgres:
         condition: service_healthy

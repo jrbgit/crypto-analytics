@@ -156,6 +156,11 @@ logs/error_report.json
 *.sqlite*
 postgresql.conf/
 
+# Backups
+backups/
+*.sql
+*.dump
+
 # API keys and secrets
 *.key
 *.pem
