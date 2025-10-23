@@ -5,7 +5,7 @@ A comprehensive system for collecting, processing, storing, and analyzing crypto
 ## 🚀 Features
 
 ### Data Collection
-- **LiveCoinWatch Integration**: Automated collection of 10,000+ crypto projects with market data, links, and metadata
+- **LiveCoinWatch Integration**: Automated collection of 52,000+ crypto projects with market data, links, and metadata
 - **Multi-source Scraping**: Websites, whitepapers, Reddit, Twitter, Telegram, Medium, and YouTube
 - **Rate Limiting & Error Handling**: Robust API client with retry logic and rate limit management
 - **Change Tracking**: Historical tracking of all data changes with timestamp and source attribution
@@ -166,7 +166,7 @@ See `docs/DATABASE_MIGRATION_GUIDE.md` for detailed schema information.
 ### Primary Data
 - **LiveCoinWatch**: Market data, rankings, supply metrics, project links
 - Rate limit: 10,000 requests/day
-- Coverage: 10,000+ crypto projects
+- Coverage: 52,000+ crypto projects
 
 ### Content Sources
 - **Project Websites**: Technology stack, features, use cases
