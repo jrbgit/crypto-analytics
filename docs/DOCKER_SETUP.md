@@ -14,11 +14,16 @@ This document describes the Docker infrastructure for the crypto analytics proje
 - **Optimizations**: Configured for analytical workloads with parallel queries
 
 **Performance Tuning:**
-- `max_connections=200` - Supports concurrent scraping
-- `shared_buffers=256MB` - Memory cache for data
-- `effective_cache_size=1GB` - Helps query planner
-- `work_mem=8MB` - Per-query memory
-- `max_parallel_workers=8` - Parallel query execution
+- `max_connections=300` - Supports high concurrent loads
+- `shared_buffers=512MB` - Doubled memory cache for better performance
+- `effective_cache_size=2GB` - Increased for query optimization
+- `work_mem=16MB` - Doubled per-query memory for complex operations
+- `maintenance_work_mem=256MB` - Faster index creation and maintenance
+- `wal_buffers=32MB` - Improved write-ahead log performance
+- `max_parallel_workers=12` - More parallel query execution
+- `max_parallel_workers_per_gather=6` - More parallel workers per query
+- `max_parallel_maintenance_workers=4` - Parallel index builds
+- `log_statement=ddl` - Only log schema changes (reduced logging overhead)
 
 #### Redis (Port 6379)
 - **Image**: `redis:7-alpine`
@@ -237,12 +242,32 @@ ls -la backups/
 
 ## Resource Usage
 
-Typical resource consumption:
-- **PostgreSQL**: 500MB - 2GB RAM
-- **Redis**: 100MB - 512MB RAM
-- **Admin tools**: 100MB - 300MB RAM each
+### Resource Limits Summary
 
-Total recommended RAM: **2-4GB**
+| Service | CPU Limit | CPU Reserved | Memory Limit | Memory Reserved |
+|---------|-----------|--------------|--------------|------------------|
+| PostgreSQL | 4 cores | 2 cores | 4GB | 2GB |
+| Redis | 1 core | 0.5 cores | 1GB | 512MB |
+| Adminer | 0.5 cores | 0.25 cores | 512MB | 256MB |
+| pgAdmin | 1 core | 0.25 cores | 1GB | 256MB |
+| Backup | 2 cores | 0.5 cores | 2GB | 512MB |
+
+### System Requirements
+
+**Minimum (Core services only):**
+- **CPU**: 4 cores
+- **RAM**: 6GB
+- **Storage**: 20GB
+
+**Recommended (All services):**
+- **CPU**: 8+ cores
+- **RAM**: 10GB+
+- **Storage**: 50GB+
+
+**Production:**
+- **CPU**: 12+ cores
+- **RAM**: 16GB+
+- **Storage**: 100GB+ (SSD recommended)
 
 ## Future Enhancements
 
