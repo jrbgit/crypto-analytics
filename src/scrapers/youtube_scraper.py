@@ -413,6 +413,15 @@ class YouTubeScraper:
         try:
             parsed = urlparse(youtube_url)
 
+            # Validate that this is actually a YouTube URL
+            if (
+                parsed.netloc
+                and "youtube.com" not in parsed.netloc
+                and "youtu.be" not in parsed.netloc
+            ):
+                logger.debug(f"Not a YouTube URL: {youtube_url}")
+                return None
+
             # Handle different YouTube URL formats:
             # https://youtube.com/channel/UCxxxxx
             # https://youtube.com/@username
