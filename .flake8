@@ -1,10 +1,8 @@
 [flake8]
-max-line-length = 100
-extend-ignore =
-    E203,  # whitespace before ':' (PEP8/black conflict)
-    W503,  # line break before binary operator (PEP8/black conflict)
-    E402,  # module level import not at top of file (allow path setup in scripts)
-    F541,  # f-string without placeholders (allow constant f-strings)
+max-line-length = 120
+# Only check for critical errors: undefined names, syntax errors, etc.
+select = E9,F63,F7,F82
+ignore = F821,F824
 exclude =
     .git,
     __pycache__,

@@ -37,51 +37,51 @@ load_dotenv(config_path)
 @dataclass
 class WhitepaperAnalysis:
     """Structured analysis result for a cryptocurrency whitepaper."""
-    
+
     # Core technical assessment
     technical_depth_score: int  # 1-10, depth of technical detail
     content_quality_score: int  # 1-10, overall content quality
     document_structure_score: int  # 1-10, organization and clarity
-    
+
     # Tokenomics and economics
     has_tokenomics: bool
     tokenomics_summary: Optional[str]
     token_distribution_described: bool
     economic_model_clarity: int  # 1-10, how clear the economic model is
-    
+
     # Use case and value proposition
     use_cases_described: List[str]
     use_case_viability_score: int  # 1-10, how viable the use cases are
     target_market_defined: bool
     unique_value_proposition: Optional[str]
-    
+
     # Technical innovation
     innovations_claimed: List[str]
     technical_innovations_score: int  # 1-10, novelty of technical approach
     implementation_details: int  # 1-10, level of implementation detail provided
-    
+
     # Competitive analysis
     has_competitive_analysis: bool
     competitors_mentioned: List[str]
     competitive_advantages_claimed: List[str]
-    
+
     # Team and development
     team_described: bool
     team_expertise_apparent: bool
     development_roadmap_present: bool
     roadmap_specificity: int  # 1-10, how specific the roadmap is
-    
+
     # Risk and validation
     red_flags: List[str]
     plagiarism_indicators: List[str]
     vague_claims: List[str]
     unrealistic_promises: List[str]
-    
+
     # Market and adoption
     market_size_analysis: bool
     adoption_strategy_described: bool
     partnerships_mentioned: List[str]
-    
+
     # Document metadata
     document_type: str  # 'pdf' or 'webpage'
     word_count: int
@@ -93,11 +93,17 @@ class WhitepaperAnalysis:
 
 class WhitepaperContentAnalyzer:
     """LLM-powered whitepaper content analyzer for cryptocurrency projects."""
-    
-    def __init__(self, provider: str = "ollama", model: str = "llama3.1:latest", ollama_base_url: str = "http://localhost:11434", db_manager: DatabaseManager = None):
+
+    def __init__(
+        self,
+        provider: str = "ollama",
+        model: str = "llama3.1:latest",
+        ollama_base_url: str = "http://localhost:11434",
+        db_manager: DatabaseManager = None,
+    ):
         """
         Initialize the analyzer.
-        
+
         Args:
             provider: "anthropic", "openai", or "ollama"
             model: Model to use for analysis
@@ -108,7 +114,7 @@ class WhitepaperContentAnalyzer:
         self.model = model
         self.ollama_base_url = ollama_base_url
         self.db_manager = db_manager
-        
+
         # Initialize clients
         if provider == "anthropic":
             self.anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -119,32 +125,42 @@ class WhitepaperContentAnalyzer:
             self._test_ollama_connection()
         else:
             raise ValueError(f"Unsupported provider: {provider}")
-        
+
         # Analysis prompts
         self.analysis_prompt = self._build_analysis_prompt()
-        
+
     def _test_ollama_connection(self):
         """Test connection to Ollama server."""
         try:
             response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=5)
             if response.status_code == 200:
-                available_models = response.json().get('models', [])
-                model_names = [model['name'] for model in available_models]
-                logger.info(f"Connected to Ollama server. Available models: {model_names}")
-                
+                available_models = response.json().get("models", [])
+                model_names = [model["name"] for model in available_models]
+                logger.info(
+                    f"Connected to Ollama server. Available models: {model_names}"
+                )
+
                 # Check if our model is available
                 if not any(self.model in name for name in model_names):
-                    logger.warning(f"Model {self.model} not found. Available models: {model_names}")
-                    logger.info(f"You can pull the model with: ollama pull {self.model}")
+                    logger.warning(
+                        f"Model {self.model} not found. Available models: {model_names}"
+                    )
+                    logger.info(
+                        f"You can pull the model with: ollama pull {self.model}"
+                    )
                 else:
                     logger.success(f"Model {self.model} is available")
             else:
-                logger.error(f"Failed to connect to Ollama: HTTP {response.status_code}")
+                logger.error(
+                    f"Failed to connect to Ollama: HTTP {response.status_code}"
+                )
                 raise ConnectionError(f"Ollama server returned {response.status_code}")
         except requests.exceptions.RequestException as e:
-            logger.error(f"Cannot connect to Ollama server at {self.ollama_base_url}: {e}")
+            logger.error(
+                f"Cannot connect to Ollama server at {self.ollama_base_url}: {e}"
+            )
             raise ConnectionError(f"Ollama connection failed: {e}")
-        
+
     def _build_analysis_prompt(self) -> str:
         """Build the comprehensive whitepaper analysis prompt."""
         return """
@@ -224,61 +240,64 @@ Content to analyze:
                 model=self.model,
                 max_tokens=3000,
                 messages=[
-                    {
-                        "role": "user", 
-                        "content": self.analysis_prompt + "\n\n" + content
-                    }
-                ]
+                    {"role": "user", "content": self.analysis_prompt + "\n\n" + content}
+                ],
             )
-            
+
             # Extract JSON from response
             response_text = response.content[0].text
-            
+
             # Try to find JSON in the response
-            start_idx = response_text.find('{')
-            end_idx = response_text.rfind('}') + 1
-            
+            start_idx = response_text.find("{")
+            end_idx = response_text.rfind("}") + 1
+
             if start_idx == -1 or end_idx == 0:
                 logger.error("No JSON found in response")
                 return None
-                
+
             json_str = response_text[start_idx:end_idx]
             return json.loads(json_str)
-            
+
         except Exception as e:
             logger.error(f"Anthropic API call failed: {e}")
             return None
-    
+
     def _call_openai(self, content: str) -> Dict[str, Any]:
         """Make API call to OpenAI."""
         try:
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a blockchain and cryptocurrency analyst. Always respond with valid JSON only."},
-                    {"role": "user", "content": self.analysis_prompt + "\n\n" + content}
+                    {
+                        "role": "system",
+                        "content": "You are a blockchain and cryptocurrency analyst. Always respond with valid JSON only.",
+                    },
+                    {
+                        "role": "user",
+                        "content": self.analysis_prompt + "\n\n" + content,
+                    },
                 ],
                 max_tokens=3000,
-                temperature=0.3
+                temperature=0.3,
             )
-            
+
             response_text = response.choices[0].message.content
-            
+
             # Try to parse as JSON
-            start_idx = response_text.find('{')
-            end_idx = response_text.rfind('}') + 1
-            
+            start_idx = response_text.find("{")
+            end_idx = response_text.rfind("}") + 1
+
             if start_idx == -1 or end_idx == 0:
                 logger.error("No JSON found in response")
                 return None
-                
+
             json_str = response_text[start_idx:end_idx]
             return json.loads(json_str)
-            
+
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")
             return None
-    
+
     def _call_ollama(self, content: str) -> Dict[str, Any]:
         """Make API call to Ollama server with enhanced usage tracking."""
         start_time = time.time()
@@ -290,64 +309,62 @@ Content to analyze:
                 "prompt": full_prompt,
                 "stream": False,
                 "format": "json",
-                "options": {
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "num_predict": 3000
-                }
+                "options": {"temperature": 0.3, "top_p": 0.9, "num_predict": 3000},
             }
-            
+
             logger.debug(f"Making Ollama API call with model {self.model}")
             response = requests.post(
                 f"{self.ollama_base_url}/api/generate",
                 json=payload,
-                timeout=180  # Longer timeout for whitepaper analysis
+                timeout=180,  # Longer timeout for whitepaper analysis
             )
             response.raise_for_status()
-            
+
             result = response.json()
             response_time = time.time() - start_time
-            response_text = result.get('response', '')
-            
+            response_text = result.get("response", "")
+
             # Estimate token usage (rough approximation: ~0.75 words per token)
             prompt_tokens = len(full_prompt.split()) // 0.75
             response_tokens = len(response_text.split()) // 0.75 if response_text else 0
             estimated_tokens = int(prompt_tokens + response_tokens)
-            
+
             # Log API usage if db_manager is available
             if self.db_manager:
                 try:
                     with self.db_manager.get_session() as session:
                         self.db_manager.log_api_usage(
                             session=session,
-                            provider='ollama',
-                            endpoint=f'{self.model}/generate',
+                            provider="ollama",
+                            endpoint=f"{self.model}/generate",
                             status=response.status_code,
                             credits=1,
                             response_size=estimated_tokens,
-                            response_time=response_time
+                            response_time=response_time,
                         )
                         session.commit()
-                        logger.debug(f"Ollama whitepaper usage: {estimated_tokens} tokens, {response_time:.2f}s response time")
+                        logger.debug(
+                            f"Ollama whitepaper usage: {estimated_tokens} tokens, {response_time:.2f}s response time"
+                        )
                 except Exception as e:
                     logger.warning(f"Failed to log Ollama API usage: {e}")
-            
+
             # Try to parse the JSON response
             if response_text.strip():
                 # Sometimes the model wraps JSON in markdown code blocks
-                if '```json' in response_text:
-                    start_idx = response_text.find('```json') + 7
-                    end_idx = response_text.find('```', start_idx)
+                if "```json" in response_text:
+                    start_idx = response_text.find("```json") + 7
+                    end_idx = response_text.find("```", start_idx)
                     response_text = response_text[start_idx:end_idx]
-                elif '```' in response_text:
-                    start_idx = response_text.find('```') + 3
-                    end_idx = response_text.rfind('```')
+                elif "```" in response_text:
+                    start_idx = response_text.find("```") + 3
+                    end_idx = response_text.rfind("```")
                     response_text = response_text[start_idx:end_idx]
-                
+
                 # Find JSON in the response
-                start_idx = response_text.find('{')
-                end_idx = response_text.rfind('}') + 1
-                
+                start_idx = response_text.find("{")
+                end_idx = response_text.rfind("}") + 1
+
                 if start_idx != -1 and end_idx > start_idx:
                     json_str = response_text[start_idx:end_idx]
                     return json_lib.loads(json_str)
@@ -357,7 +374,7 @@ Content to analyze:
             else:
                 logger.error("Empty response from Ollama")
                 return None
-                
+
         except requests.exceptions.RequestException as e:
             response_time = time.time() - start_time
             # Log failed request
@@ -366,18 +383,18 @@ Content to analyze:
                     with self.db_manager.get_session() as session:
                         self.db_manager.log_api_usage(
                             session=session,
-                            provider='ollama',
-                            endpoint=f'{self.model}/generate',
+                            provider="ollama",
+                            endpoint=f"{self.model}/generate",
                             status=0,
                             credits=0,
                             response_size=0,
                             response_time=response_time,
-                            error_message=str(e)
+                            error_message=str(e),
                         )
                         session.commit()
                 except Exception as log_error:
                     logger.warning(f"Failed to log Ollama request error: {log_error}")
-            
+
             logger.error(f"Ollama API request failed: {e}")
             return None
         except json_lib.JSONDecodeError as e:
@@ -389,31 +406,41 @@ Content to analyze:
             response_time = time.time() - start_time
             logger.error(f"Ollama API call failed: {e}")
             return None
-    
-    def analyze_whitepaper(self, content: str, document_type: str, word_count: int, page_count: Optional[int] = None) -> Optional[WhitepaperAnalysis]:
+
+    def analyze_whitepaper(
+        self,
+        content: str,
+        document_type: str,
+        word_count: int,
+        page_count: Optional[int] = None,
+    ) -> Optional[WhitepaperAnalysis]:
         """
         Analyze whitepaper content and return structured analysis.
-        
+
         Args:
             content: The whitepaper text content
             document_type: 'pdf' or 'webpage'
             word_count: Number of words in the content
             page_count: Number of pages (for PDFs)
-            
+
         Returns:
             WhitepaperAnalysis object or None if analysis failed
         """
         if not content or not content.strip():
-            logger.warning("No content provided for analysis - likely empty webpage or failed extraction")
+            logger.warning(
+                "No content provided for analysis - likely empty webpage or failed extraction"
+            )
             return None
-        
-        logger.info(f"Starting LLM analysis of {document_type} whitepaper ({word_count} words)")
-        
+
+        logger.info(
+            f"Starting LLM analysis of {document_type} whitepaper ({word_count} words)"
+        )
+
         # Limit content size for API calls (roughly 15,000 characters for 4K tokens)
         if len(content) > 15000:
             content = content[:15000] + "\n[Content truncated for analysis]"
             logger.debug("Content truncated for LLM analysis")
-        
+
         # Make LLM API call
         if self.provider == "anthropic":
             raw_analysis = self._call_anthropic(content)
@@ -424,11 +451,11 @@ Content to analyze:
         else:
             logger.error(f"Unsupported provider: {self.provider}")
             return None
-        
+
         if not raw_analysis:
             logger.error("LLM analysis failed")
             return None
-        
+
         try:
             # Helper function to ensure integer scores
             def ensure_int_score(value, default=5, min_val=1, max_val=10):
@@ -436,68 +463,93 @@ Content to analyze:
                 if isinstance(value, str):
                     # Try to extract a number from the string
                     import re
-                    match = re.search(r'\b([1-9]|10)\b', value)
+
+                    match = re.search(r"\b([1-9]|10)\b", value)
                     if match:
                         return int(match.group(1))
                     else:
-                        logger.warning(f"Could not extract score from string: {value[:100]}...")
+                        logger.warning(
+                            f"Could not extract score from string: {value[:100]}..."
+                        )
                         return default
                 elif isinstance(value, (int, float)):
                     score = int(value)
                     return max(min_val, min(max_val, score))  # Clamp to range
                 else:
                     return default
-            
+
             # Create WhitepaperAnalysis object from the response
             analysis = WhitepaperAnalysis(
-                technical_depth_score=ensure_int_score(raw_analysis.get('technical_depth_score', 5)),
-                content_quality_score=ensure_int_score(raw_analysis.get('content_quality_score', 5)),
-                document_structure_score=ensure_int_score(raw_analysis.get('document_structure_score', 5)),
-                
-                has_tokenomics=raw_analysis.get('has_tokenomics', False),
-                tokenomics_summary=raw_analysis.get('tokenomics_summary'),
-                token_distribution_described=raw_analysis.get('token_distribution_described', False),
-                economic_model_clarity=ensure_int_score(raw_analysis.get('economic_model_clarity', 5)),
-                
-                use_cases_described=raw_analysis.get('use_cases_described', []),
-                use_case_viability_score=ensure_int_score(raw_analysis.get('use_case_viability_score', 5)),
-                target_market_defined=raw_analysis.get('target_market_defined', False),
-                unique_value_proposition=raw_analysis.get('unique_value_proposition'),
-                
-                innovations_claimed=raw_analysis.get('innovations_claimed', []),
-                technical_innovations_score=ensure_int_score(raw_analysis.get('technical_innovations_score', 5)),
-                implementation_details=ensure_int_score(raw_analysis.get('implementation_details', 5)),
-                
-                has_competitive_analysis=raw_analysis.get('has_competitive_analysis', False),
-                competitors_mentioned=raw_analysis.get('competitors_mentioned', []),
-                competitive_advantages_claimed=raw_analysis.get('competitive_advantages_claimed', []),
-                
-                team_described=raw_analysis.get('team_described', False),
-                team_expertise_apparent=raw_analysis.get('team_expertise_apparent', False),
-                development_roadmap_present=raw_analysis.get('development_roadmap_present', False),
-                roadmap_specificity=ensure_int_score(raw_analysis.get('roadmap_specificity', 5)),
-                
-                red_flags=raw_analysis.get('red_flags', []),
-                plagiarism_indicators=raw_analysis.get('plagiarism_indicators', []),
-                vague_claims=raw_analysis.get('vague_claims', []),
-                unrealistic_promises=raw_analysis.get('unrealistic_promises', []),
-                
-                market_size_analysis=raw_analysis.get('market_size_analysis', False),
-                adoption_strategy_described=raw_analysis.get('adoption_strategy_described', False),
-                partnerships_mentioned=raw_analysis.get('partnerships_mentioned', []),
-                
+                technical_depth_score=ensure_int_score(
+                    raw_analysis.get("technical_depth_score", 5)
+                ),
+                content_quality_score=ensure_int_score(
+                    raw_analysis.get("content_quality_score", 5)
+                ),
+                document_structure_score=ensure_int_score(
+                    raw_analysis.get("document_structure_score", 5)
+                ),
+                has_tokenomics=raw_analysis.get("has_tokenomics", False),
+                tokenomics_summary=raw_analysis.get("tokenomics_summary"),
+                token_distribution_described=raw_analysis.get(
+                    "token_distribution_described", False
+                ),
+                economic_model_clarity=ensure_int_score(
+                    raw_analysis.get("economic_model_clarity", 5)
+                ),
+                use_cases_described=raw_analysis.get("use_cases_described", []),
+                use_case_viability_score=ensure_int_score(
+                    raw_analysis.get("use_case_viability_score", 5)
+                ),
+                target_market_defined=raw_analysis.get("target_market_defined", False),
+                unique_value_proposition=raw_analysis.get("unique_value_proposition"),
+                innovations_claimed=raw_analysis.get("innovations_claimed", []),
+                technical_innovations_score=ensure_int_score(
+                    raw_analysis.get("technical_innovations_score", 5)
+                ),
+                implementation_details=ensure_int_score(
+                    raw_analysis.get("implementation_details", 5)
+                ),
+                has_competitive_analysis=raw_analysis.get(
+                    "has_competitive_analysis", False
+                ),
+                competitors_mentioned=raw_analysis.get("competitors_mentioned", []),
+                competitive_advantages_claimed=raw_analysis.get(
+                    "competitive_advantages_claimed", []
+                ),
+                team_described=raw_analysis.get("team_described", False),
+                team_expertise_apparent=raw_analysis.get(
+                    "team_expertise_apparent", False
+                ),
+                development_roadmap_present=raw_analysis.get(
+                    "development_roadmap_present", False
+                ),
+                roadmap_specificity=ensure_int_score(
+                    raw_analysis.get("roadmap_specificity", 5)
+                ),
+                red_flags=raw_analysis.get("red_flags", []),
+                plagiarism_indicators=raw_analysis.get("plagiarism_indicators", []),
+                vague_claims=raw_analysis.get("vague_claims", []),
+                unrealistic_promises=raw_analysis.get("unrealistic_promises", []),
+                market_size_analysis=raw_analysis.get("market_size_analysis", False),
+                adoption_strategy_described=raw_analysis.get(
+                    "adoption_strategy_described", False
+                ),
+                partnerships_mentioned=raw_analysis.get("partnerships_mentioned", []),
                 document_type=document_type,
                 word_count=word_count,
                 page_count=page_count,
                 analysis_timestamp=datetime.now(UTC),
                 model_used=self.model,
-                confidence_score=raw_analysis.get('confidence_score', 0.5)
+                confidence_score=raw_analysis.get("confidence_score", 0.5),
             )
-            
-            logger.success(f"Whitepaper analysis complete - Technical depth: {analysis.technical_depth_score}/10, Quality: {analysis.content_quality_score}/10")
-            
+
+            logger.success(
+                f"Whitepaper analysis complete - Technical depth: {analysis.technical_depth_score}/10, Quality: {analysis.content_quality_score}/10"
+            )
+
             return analysis
-            
+
         except Exception as e:
             logger.error(f"Failed to create WhitepaperAnalysis object: {e}")
             logger.debug(f"Raw analysis data: {raw_analysis}")
@@ -507,7 +559,7 @@ Content to analyze:
 def main():
     """Test the whitepaper analyzer."""
     analyzer = WhitepaperContentAnalyzer()
-    
+
     # Test with sample content
     sample_content = """
     Bitcoin: A Peer-to-Peer Electronic Cash System
@@ -520,10 +572,12 @@ def main():
     2. Transactions
     We define an electronic coin as a chain of digital signatures. Each owner transfers the coin to the next by digitally signing a hash of the previous transaction and the public key of the next owner and adding these to the end of the coin.
     """
-    
+
     print("=== Testing Whitepaper Analyzer ===")
-    result = analyzer.analyze_whitepaper(sample_content, 'pdf', len(sample_content.split()), 9)
-    
+    result = analyzer.analyze_whitepaper(
+        sample_content, "pdf", len(sample_content.split()), 9
+    )
+
     if result:
         print(f"Technical Depth: {result.technical_depth_score}/10")
         print(f"Content Quality: {result.content_quality_score}/10")

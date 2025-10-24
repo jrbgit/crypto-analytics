@@ -15,10 +15,10 @@ from src.models.whitepaper_status import WhitepaperStatusType, WhitepaperErrorTy
 
 class WhitepaperStatusLogger:
     """Service for logging whitepaper status and health information."""
-    
+
     def __init__(self, db_manager):
         self.db_manager = db_manager
-        
+
     def log_whitepaper_status(
         self,
         link_id: int,
@@ -45,15 +45,18 @@ class WhitepaperStatusLogger:
         javascript_required: Optional[bool] = None,
         error_type: Optional[str] = None,
         error_details: Optional[str] = None,
-        file_hash: Optional[str] = None
+        file_hash: Optional[str] = None,
     ):
         """Log comprehensive whitepaper status information."""
-        
+
         try:
             with self.db_manager.get_session() as session:
                 from sqlalchemy import text
+
                 # Insert into whitepaper_status_log table
-                session.execute(text("""
+                session.execute(
+                    text(
+                        """
                     INSERT INTO whitepaper_status_log (
                         link_id, status_type, status_message, document_type, document_size_bytes,
                         pages_extracted, word_count, http_status_code, response_time_ms,
@@ -69,38 +72,60 @@ class WhitepaperStatusLogger:
                         :detected_language, :detected_format, :requires_authentication, :behind_paywall,
                         :cloudflare_protected, :javascript_required, :error_type, :error_details, :file_hash
                     )
-                """), {
-                    'link_id': link_id, 'status_type': status_type, 'status_message': status_message,
-                    'document_type': document_type, 'document_size_bytes': document_size_bytes,
-                    'pages_extracted': pages_extracted, 'word_count': word_count,
-                    'http_status_code': http_status_code, 'response_time_ms': response_time_ms,
-                    'dns_resolved': dns_resolved, 'ssl_valid': ssl_valid,
-                    'extraction_method': extraction_method, 'extraction_success': extraction_success,
-                    'content_quality_score': content_quality_score, 'has_meaningful_content': has_meaningful_content,
-                    'min_word_threshold_met': min_word_threshold_met, 'detected_language': detected_language,
-                    'detected_format': detected_format, 'requires_authentication': requires_authentication,
-                    'behind_paywall': behind_paywall, 'cloudflare_protected': cloudflare_protected,
-                    'javascript_required': javascript_required, 'error_type': error_type,
-                    'error_details': error_details, 'file_hash': file_hash
-                })
-                
+                """
+                    ),
+                    {
+                        "link_id": link_id,
+                        "status_type": status_type,
+                        "status_message": status_message,
+                        "document_type": document_type,
+                        "document_size_bytes": document_size_bytes,
+                        "pages_extracted": pages_extracted,
+                        "word_count": word_count,
+                        "http_status_code": http_status_code,
+                        "response_time_ms": response_time_ms,
+                        "dns_resolved": dns_resolved,
+                        "ssl_valid": ssl_valid,
+                        "extraction_method": extraction_method,
+                        "extraction_success": extraction_success,
+                        "content_quality_score": content_quality_score,
+                        "has_meaningful_content": has_meaningful_content,
+                        "min_word_threshold_met": min_word_threshold_met,
+                        "detected_language": detected_language,
+                        "detected_format": detected_format,
+                        "requires_authentication": requires_authentication,
+                        "behind_paywall": behind_paywall,
+                        "cloudflare_protected": cloudflare_protected,
+                        "javascript_required": javascript_required,
+                        "error_type": error_type,
+                        "error_details": error_details,
+                        "file_hash": file_hash,
+                    },
+                )
+
                 # Update current status in project_links
-                self._update_link_current_status(session, link_id, status_type, document_type)
-                
+                self._update_link_current_status(
+                    session, link_id, status_type, document_type
+                )
+
                 session.commit()
-                
-                logger.debug(f"Logged whitepaper status: {status_type} for link_id {link_id}")
-                
+
+                logger.debug(
+                    f"Logged whitepaper status: {status_type} for link_id {link_id}"
+                )
+
         except Exception as e:
             logger.error(f"Failed to log whitepaper status: {e}")
-    
-    def _update_link_current_status(self, session, link_id: int, status_type: str, document_type: str = None):
+
+    def _update_link_current_status(
+        self, session, link_id: int, status_type: str, document_type: str = None
+    ):
         """Update the current whitepaper status in project_links table."""
-        
+
         # Determine if this is a failure
         is_failure = status_type in [
             WhitepaperStatusType.ACCESS_DENIED,
-            WhitepaperStatusType.NOT_FOUND, 
+            WhitepaperStatusType.NOT_FOUND,
             WhitepaperStatusType.AUTHENTICATION_REQUIRED,
             WhitepaperStatusType.INSUFFICIENT_CONTENT,
             WhitepaperStatusType.NO_CONTENT_EXTRACTED,
@@ -111,14 +136,16 @@ class WhitepaperStatusLogger:
             WhitepaperStatusType.CONNECTION_ERROR,
             WhitepaperStatusType.PDF_EXTRACTION_FAILED,
             WhitepaperStatusType.WEBPAGE_PARSING_FAILED,
-            WhitepaperStatusType.UNKNOWN_ERROR
+            WhitepaperStatusType.UNKNOWN_ERROR,
         ]
-        
+
         from sqlalchemy import text
-        
+
         if is_failure:
             # Increment consecutive failures
-            session.execute(text("""
+            session.execute(
+                text(
+                    """
                 UPDATE project_links 
                 SET current_whitepaper_status = :status_type,
                     last_whitepaper_check = NOW(),
@@ -127,10 +154,20 @@ class WhitepaperStatusLogger:
                     whitepaper_access_restricted = CASE WHEN :status_type2 IN ('access_denied', 'authentication_required', 'paywall_detected') THEN TRUE ELSE whitepaper_access_restricted END,
                     whitepaper_format_detected = COALESCE(:document_type, whitepaper_format_detected)
                 WHERE id = :link_id
-            """), {'status_type': status_type, 'status_type2': status_type, 'document_type': document_type, 'link_id': link_id})
+            """
+                ),
+                {
+                    "status_type": status_type,
+                    "status_type2": status_type,
+                    "document_type": document_type,
+                    "link_id": link_id,
+                },
+            )
         else:
             # Reset failure counters on success
-            session.execute(text("""
+            session.execute(
+                text(
+                    """
                 UPDATE project_links 
                 SET current_whitepaper_status = :status_type,
                     last_whitepaper_check = NOW(),
@@ -139,8 +176,15 @@ class WhitepaperStatusLogger:
                     whitepaper_last_successful_extraction = NOW(),
                     whitepaper_format_detected = COALESCE(:document_type, whitepaper_format_detected)
                 WHERE id = :link_id
-            """), {'status_type': status_type, 'document_type': document_type, 'link_id': link_id})
-    
+            """
+                ),
+                {
+                    "status_type": status_type,
+                    "document_type": document_type,
+                    "link_id": link_id,
+                },
+            )
+
     def log_extraction_success(
         self,
         link_id: int,
@@ -151,16 +195,16 @@ class WhitepaperStatusLogger:
         extraction_method: str = None,
         document_size_bytes: int = None,
         response_time_ms: int = None,
-        file_hash: str = None
+        file_hash: str = None,
     ):
         """Log successful whitepaper extraction."""
-        
+
         # Determine specific success type
-        if document_type == 'pdf':
+        if document_type == "pdf":
             status_type = WhitepaperStatusType.PDF_EXTRACTION_SUCCESS
         else:
             status_type = WhitepaperStatusType.WEBPAGE_EXTRACTION_SUCCESS
-        
+
         # Calculate content quality score based on word count
         if word_count >= 1000:
             content_quality = 10
@@ -174,7 +218,7 @@ class WhitepaperStatusLogger:
             content_quality = 2
         else:
             content_quality = 1
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=status_type,
@@ -189,21 +233,23 @@ class WhitepaperStatusLogger:
             has_meaningful_content=word_count >= 20,
             min_word_threshold_met=word_count >= 20,
             response_time_ms=response_time_ms,
-            file_hash=file_hash
+            file_hash=file_hash,
         )
-        
+
         logger.success(f"Whitepaper extraction successful: {url} ({word_count} words)")
-    
-    def log_access_denied(self, link_id: int, url: str, http_status_code: int, error_details: str = None):
+
+    def log_access_denied(
+        self, link_id: int, url: str, http_status_code: int, error_details: str = None
+    ):
         """Log when whitepaper access is denied (403, 401, etc.)."""
-        
+
         if http_status_code == 401:
             status_type = WhitepaperStatusType.AUTHENTICATION_REQUIRED
             message = f"Authentication required to access whitepaper: {url}"
         else:
             status_type = WhitepaperStatusType.ACCESS_DENIED
             message = f"Access denied ({http_status_code}) to whitepaper: {url}"
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=status_type,
@@ -212,14 +258,14 @@ class WhitepaperStatusLogger:
             extraction_success=False,
             requires_authentication=http_status_code == 401,
             error_type=WhitepaperErrorType.ACCESS_FORBIDDEN,
-            error_details=error_details
+            error_details=error_details,
         )
-        
+
         logger.warning(f"Whitepaper access denied: {url} ({http_status_code})")
-    
+
     def log_not_found(self, link_id: int, url: str, error_details: str = None):
         """Log when whitepaper is not found (404)."""
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=WhitepaperStatusType.NOT_FOUND,
@@ -227,14 +273,21 @@ class WhitepaperStatusLogger:
             http_status_code=404,
             extraction_success=False,
             error_type=WhitepaperErrorType.ACCESS_FORBIDDEN,
-            error_details=error_details
+            error_details=error_details,
         )
-        
+
         logger.warning(f"Whitepaper not found: {url}")
-    
-    def log_insufficient_content(self, link_id: int, url: str, word_count: int, document_type: str, extraction_method: str = None):
+
+    def log_insufficient_content(
+        self,
+        link_id: int,
+        url: str,
+        word_count: int,
+        document_type: str,
+        extraction_method: str = None,
+    ):
         """Log when insufficient content is extracted (<20 words)."""
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=WhitepaperStatusType.INSUFFICIENT_CONTENT,
@@ -245,16 +298,22 @@ class WhitepaperStatusLogger:
             extraction_success=False,
             has_meaningful_content=False,
             min_word_threshold_met=False,
-            javascript_required=document_type == 'webpage',  # Likely JS-heavy site
+            javascript_required=document_type == "webpage",  # Likely JS-heavy site
             error_type=WhitepaperErrorType.MINIMAL_CONTENT,
-            error_details=f"Only {word_count} words extracted, likely dynamic content or access restrictions"
+            error_details=f"Only {word_count} words extracted, likely dynamic content or access restrictions",
         )
-        
+
         logger.warning(f"Insufficient whitepaper content: {url} ({word_count} words)")
-    
-    def log_pdf_extraction_failed(self, link_id: int, url: str, error_message: str, document_size_bytes: int = None):
+
+    def log_pdf_extraction_failed(
+        self,
+        link_id: int,
+        url: str,
+        error_message: str,
+        document_size_bytes: int = None,
+    ):
         """Log when PDF extraction fails."""
-        
+
         # Categorize PDF error
         if "password" in error_message.lower() or "encrypted" in error_message.lower():
             error_type = WhitepaperErrorType.PDF_PASSWORD_PROTECTED
@@ -265,23 +324,23 @@ class WhitepaperStatusLogger:
         else:
             error_type = WhitepaperErrorType.PDF_EXTRACTION_ERROR
             status_message = f"PDF extraction failed for: {url}"
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=WhitepaperStatusType.PDF_EXTRACTION_FAILED,
             status_message=status_message,
-            document_type='pdf',
+            document_type="pdf",
             document_size_bytes=document_size_bytes,
             extraction_success=False,
             error_type=error_type,
-            error_details=error_message
+            error_details=error_message,
         )
-        
+
         logger.warning(f"PDF extraction failed: {url} - {error_message[:100]}...")
-    
+
     def log_connection_error(self, link_id: int, url: str, error_message: str):
         """Log connection/network errors."""
-        
+
         # Categorize connection error
         if "timeout" in error_message.lower():
             status_type = WhitepaperStatusType.TIMEOUT
@@ -295,16 +354,16 @@ class WhitepaperStatusLogger:
         else:
             status_type = WhitepaperStatusType.CONNECTION_ERROR
             error_type = WhitepaperErrorType.CONNECTION_ERROR
-        
+
         self.log_whitepaper_status(
             link_id=link_id,
             status_type=status_type,
             status_message=f"Connection failed for whitepaper: {url}",
             extraction_success=False,
             error_type=error_type,
-            error_details=error_message
+            error_details=error_message,
         )
-        
+
         logger.warning(f"Whitepaper connection error: {url} - {error_message[:100]}...")
 
 
