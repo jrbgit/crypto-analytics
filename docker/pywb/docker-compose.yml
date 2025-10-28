@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  pywb:
+    image: webrecorder/pywb:latest
+    container_name: crypto_pywb_replay
+    ports:
+      - "8080:8080"  # Main replay UI
+      - "8081:8081"  # Admin UI (optional)
+    volumes:
+      # Mount WARC storage directory (read-only for safety)
+      - ../../data/warcs:/warcs:ro
+      # Mount pywb collections configuration
+      - ./collections:/webarchive/collections
+      # Mount pywb config
+      - ./config.yaml:/webarchive/config.yaml:ro
+    environment:
+      - PYWB_CONFIG_FILE=/webarchive/config.yaml
+    restart: unless-stopped
+    networks:
+      - crypto_archival
+    labels:
+      - "com.crypto-analytics.service=pywb-replay"
+      - "com.crypto-analytics.description=Web archive replay server"
+
+networks:
+  crypto_archival:
+    driver: bridge

@@ -127,6 +127,7 @@ data/*.db
 data/*.sqlite
 data/*.csv
 data/*.json
+data/warcs/
 docker/.env
 config/.env
 logs/

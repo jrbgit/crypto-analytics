@@ -1,0 +1,76 @@
+# pywb Configuration for Crypto Analytics Web Archival System
+
+# Collections directory
+collections_root: /webarchive/collections
+
+# Enable auto collection creation
+enable_auto_colls: true
+
+# Framed replay mode (default)
+framed_replay: true
+
+# URL rewrite options
+enable_memento: true
+enable_cdx_api: true
+
+# Default collection settings
+default_coll:
+  index_paths:
+    - /warcs/cdx/
+  archive_paths:
+    - /warcs/raw/
+
+# UI customization
+ui:
+  banner_html: "Crypto Analytics Archive"
+  logo: ""
+
+# Search settings
+search:
+  # Enable full-text search (if available)
+  enable_search: true
+  
+# CDX Server options
+cdx-server:
+  # Enable JSON output
+  enable_json: true
+  # Max results per query
+  max_results: 10000
+
+# Archive paths for collections
+# These map to the WARC storage structure
+archive_paths:
+  - /warcs/raw/
+
+# CDX index paths
+cdx_paths:
+  - /warcs/cdx/
+
+# Recording settings (disabled for read-only archive)
+recorder:
+  source_coll: ""
+  
+# Content-type detection
+use_js_obj_proxy: true
+
+# CORS support for API access
+cors:
+  enabled: true
+  origins: ['*']
+
+# Proxy mode settings
+proxy:
+  ca_name: "Crypto Analytics Archive Proxy CA"
+  ca_file: ""
+
+# Per-collection settings
+collections:
+  # Main collection for all crypto project archives
+  crypto_projects:
+    index_paths:
+      - /warcs/cdx/
+    archive_paths:
+      - /warcs/raw/
+    metadata:
+      title: "Cryptocurrency Project Archives"
+      desc: "Historical snapshots of cryptocurrency project websites"

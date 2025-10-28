@@ -1,0 +1,26 @@
+# Web Archival System Dependencies
+# Install with: pip install -r requirements-archival.txt
+
+# WARC handling
+warcio>=1.7.4                    # WARC reading/writing library
+pywb>=2.7.0                      # Web archive replay and access
+
+# Storage backends (optional)
+boto3>=1.26.0                    # AWS S3 support
+azure-storage-blob>=12.19.0      # Azure Blob Storage
+
+# Job scheduling
+apscheduler>=3.10.0              # Advanced Python scheduler
+celery>=5.3.0                    # Distributed task queue (optional)
+redis>=2.10.6,<3.0               # Redis client for Celery backend (compatible with pywb)
+
+# Change detection and diff
+html5lib>=1.1                    # HTML parsing for change detection
+python-Levenshtein>=0.21.0       # Fast string similarity
+######difflib>=3.0                     # Built-in diff (no install needed)
+
+# Already in main requirements.txt (verify these exist):
+# beautifulsoup4>=4.12.0
+# requests>=2.31.0
+# loguru>=0.7.0
+# sqlalchemy>=2.0.0
