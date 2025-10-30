@@ -15,7 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, create_engine
 from sqlalchemy.orm import Session
 
 from models.database import DatabaseManager, CryptoProject, ProjectLink, get_db_session
@@ -23,6 +23,97 @@ from models.archival_models import CrawlSchedule, CrawlJob, CrawlStatus, CrawlFr
 from .crawler import ArchivalCrawler, CrawlConfig
 
 logger = logging.getLogger(__name__)
+
+
+def execute_scheduled_crawl(schedule_id: int, database_url: str, mode: str) -> None:
+    """
+    Module-level function to execute a scheduled crawl.
+    This function is picklable for APScheduler.
+    
+    Args:
+        schedule_id: ID of the schedule to execute
+        database_url: Database connection URL
+        mode: Scheduler mode (daemon/dry_run/single_run)
+    """
+    logger.info(f"Executing scheduled crawl {schedule_id}")
+    
+    # Import here to avoid circular dependencies
+    from models.database import DatabaseManager, ProjectLink
+    from models.archival_models import CrawlSchedule, CrawlJob, CrawlStatus
+    from .crawler import ArchivalCrawler, CrawlConfig
+    
+    db_manager = DatabaseManager(database_url)
+    
+    with get_db_session() as session:
+        # Get schedule
+        schedule = session.get(CrawlSchedule, schedule_id)
+        if not schedule:
+            logger.error(f"Schedule {schedule_id} not found")
+            return
+
+        # Check if schedule is still enabled
+        if not schedule.enabled:
+            logger.info(f"Schedule {schedule_id} is disabled, skipping")
+            return
+
+        # Get the project link to get URL
+        link = session.get(ProjectLink, schedule.link_id)
+        if not link or not link.url:
+            logger.error(f"Link {schedule.link_id} not found or has no URL")
+            return
+
+        # Check for existing running jobs for this link
+        existing = session.execute(
+            select(CrawlJob).filter(
+                and_(
+                    CrawlJob.link_id == schedule.link_id,
+                    or_(
+                        CrawlJob.status == CrawlStatus.PENDING,
+                        CrawlJob.status == CrawlStatus.IN_PROGRESS,
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            logger.warning(
+                f"Crawl already running for link {schedule.link_id}, skipping"
+            )
+            return
+
+        # Execute crawl
+        try:
+            if mode == "dry_run":
+                logger.info(f"DRY RUN: Would crawl {link.url} (schedule {schedule_id})")
+            else:
+                # Create crawl job manually
+                job = CrawlJob(
+                    link_id=schedule.link_id,
+                    project_id=schedule.project_id,
+                    seed_url=link.url,
+                    max_pages=50,
+                    max_depth=2,
+                    status=CrawlStatus.PENDING,
+                )
+                session.add(job)
+                session.commit()
+                session.refresh(job)
+
+                # Run crawl using the crawler
+                crawler = ArchivalCrawler(db_manager)
+                crawler.execute_crawl(job.id)
+
+                # Update schedule stats
+                schedule.last_run_at = datetime.utcnow()
+                session.commit()
+
+                logger.info(f"Completed scheduled crawl {schedule_id}")
+
+        except Exception as e:
+            logger.error(
+                f"Error executing scheduled crawl {schedule_id}: {e}", exc_info=True
+            )
+            session.commit()
 
 
 class SchedulerMode(str, Enum):
@@ -148,12 +239,12 @@ class ArchivalScheduler:
             )
             return
 
-        # Add job to scheduler
+        # Add job to scheduler - use module-level function for pickling
         self.scheduler.add_job(
-            func=self._execute_crawl,
+            func=execute_scheduled_crawl,
             trigger=trigger,
             id=job_id,
-            args=[schedule.id],
+            args=[schedule.id, self.db.database_url, self.mode.value],
             name=f"Crawl Schedule {schedule.id} (Project {schedule.project_id})",
             replace_existing=True,
         )
@@ -186,96 +277,6 @@ class ArchivalScheduler:
             logger.warning(f"Unknown frequency: {freq}")
             return None
 
-    def _execute_crawl(self, schedule_id: int) -> None:
-        """
-        Execute a scheduled crawl.
-
-        Args:
-            schedule_id: ID of the schedule to execute
-        """
-        logger.info(f"Executing scheduled crawl {schedule_id}")
-
-        with get_db_session() as session:
-            # Get schedule
-            schedule = session.get(CrawlSchedule, schedule_id)
-            if not schedule:
-                logger.error(f"Schedule {schedule_id} not found")
-                return
-
-            # Check if schedule is still enabled
-            if not schedule.enabled:
-                logger.info(f"Schedule {schedule_id} is disabled, skipping")
-                return
-
-            # Get the project link to get URL
-            from models.database import ProjectLink
-            link = session.get(ProjectLink, schedule.link_id)
-            if not link or not link.url:
-                logger.error(f"Link {schedule.link_id} not found or has no URL")
-                return
-
-            # Check for existing running jobs for this link
-            existing = session.execute(
-                select(CrawlJob).filter(
-                    and_(
-                        CrawlJob.link_id == schedule.link_id,
-                        or_(
-                            CrawlJob.status == CrawlStatus.PENDING,
-                            CrawlJob.status == CrawlStatus.IN_PROGRESS,
-                        ),
-                    )
-                )
-            ).scalar_one_or_none()
-
-            if existing:
-                logger.warning(
-                    f"Crawl already running for link {schedule.link_id}, skipping"
-                )
-                return
-
-            # Create crawler config (use simple defaults since CrawlSchedule doesn't store these)
-            config = CrawlConfig(
-                seed_url=link.url,
-                max_pages=50,
-                max_depth=2,
-                javascript_timeout=30,
-                respect_robots_txt=True,
-            )
-
-            # Execute crawl
-            try:
-                if self.mode == SchedulerMode.DRY_RUN:
-                    logger.info(f"DRY RUN: Would crawl {link.url} (schedule {schedule_id})")
-                else:
-                    # Create crawl job manually since CrawlJob stores all config
-                    from models.archival_models import CrawlJob as CrawlJobModel
-                    job = CrawlJobModel(
-                        link_id=schedule.link_id,
-                        project_id=schedule.project_id,
-                        seed_url=link.url,
-                        max_pages=50,
-                        max_depth=2,
-                        status=CrawlStatus.PENDING,
-                    )
-                    session.add(job)
-                    session.commit()
-                    session.refresh(job)
-
-                    # Run crawl using the crawler
-                    self.crawler.execute_crawl(job.id)
-
-                    # Update schedule stats
-                    schedule.last_run_at = datetime.utcnow()
-                    session.commit()
-
-                    logger.info(f"Completed scheduled crawl {schedule_id}")
-
-            except Exception as e:
-                logger.error(
-                    f"Error executing scheduled crawl {schedule_id}: {e}", exc_info=True
-                )
-                # Note: consecutive_failures doesn't exist in schema, skip it
-                session.commit()
 
     def add_schedule(
         self,
@@ -430,8 +431,8 @@ class ArchivalScheduler:
                 logger.warning(f"Schedule {schedule_id} not found")
                 return False
 
-            # Execute immediately
-            self._execute_crawl(schedule_id)
+            # Execute immediately using module-level function
+            execute_scheduled_crawl(schedule_id, self.db.database_url, self.mode.value)
             return True
 
     def adaptive_frequency_adjustment(self) -> None:
