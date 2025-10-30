@@ -16,15 +16,28 @@ from .crawler import ArchivalCrawler, CrawlConfig, CrawlResult
 from .change_detector import ChangeDetector, ChangeMetrics, format_change_report
 from .indexer import CDXIndexer, CDXEntry, batch_index_warcs
 from .scheduler import ArchivalScheduler, SchedulerMode, create_default_schedules
-from .pipeline_integration import ArchivalPipelineIntegration, create_archival_integration
+from .pipeline_integration import (
+    ArchivalPipelineIntegration,
+    create_archival_integration,
+)
 
 __all__ = [
-    'WARCStorageManager', 'StorageConfig',
-    'ArchivalCrawler', 'CrawlConfig', 'CrawlResult',
-    'ChangeDetector', 'ChangeMetrics', 'format_change_report',
-    'CDXIndexer', 'CDXEntry', 'batch_index_warcs',
-    'ArchivalScheduler', 'SchedulerMode', 'create_default_schedules',
-    'ArchivalPipelineIntegration', 'create_archival_integration',
+    "WARCStorageManager",
+    "StorageConfig",
+    "ArchivalCrawler",
+    "CrawlConfig",
+    "CrawlResult",
+    "ChangeDetector",
+    "ChangeMetrics",
+    "format_change_report",
+    "CDXIndexer",
+    "CDXEntry",
+    "batch_index_warcs",
+    "ArchivalScheduler",
+    "SchedulerMode",
+    "create_default_schedules",
+    "ArchivalPipelineIntegration",
+    "create_archival_integration",
 ]
 
-__version__ = '1.0.0'
+__version__ = "1.0.0"

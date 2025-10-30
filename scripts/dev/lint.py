@@ -17,7 +17,12 @@ def run_command(cmd, description):
     print(f"\n🔍 {description}...")
     try:
         result = subprocess.run(
-            cmd, shell=True, check=True, capture_output=True, text=True
+            cmd,
+            shell=True,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
         print(f"✅ {description} passed")
         return True

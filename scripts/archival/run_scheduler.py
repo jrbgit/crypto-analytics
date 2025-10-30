@@ -14,7 +14,6 @@ Usage:
 
     # Create default schedules for all projects
     python run_scheduler.py --init-schedules
-    
     # List pending jobs
     python run_scheduler.py --list-jobs
 """
@@ -40,17 +39,17 @@ from src.database.manager import DatabaseManager
 from src.archival.scheduler import (
     ArchivalScheduler,
     SchedulerMode,
-    create_default_schedules
+    create_default_schedules,
 )
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('logs/archival_scheduler.log')
-    ]
+        logging.FileHandler("logs/archival_scheduler.log"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -81,62 +80,60 @@ Examples:
   
   # Custom concurrency
   python run_scheduler.py --max-concurrent 5
-        """
+        """,
     )
-    
+
     parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Show what would be scheduled without executing'
+        "--dry-run",
+        action="store_true",
+        help="Show what would be scheduled without executing",
     )
-    
+
     parser.add_argument(
-        '--init-schedules',
-        action='store_true',
-        help='Create default schedules for all projects and exit'
+        "--init-schedules",
+        action="store_true",
+        help="Create default schedules for all projects and exit",
     )
-    
+
     parser.add_argument(
-        '--list-jobs',
-        action='store_true',
-        help='List all pending jobs and exit'
+        "--list-jobs", action="store_true", help="List all pending jobs and exit"
     )
-    
+
     parser.add_argument(
-        '--max-concurrent',
+        "--max-concurrent",
         type=int,
         default=3,
-        help='Maximum concurrent crawl jobs (default: 3)'
+        help="Maximum concurrent crawl jobs (default: 3)",
     )
-    
+
     parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
+        "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Set log level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     # Initialize database from environment
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        logger.error("DATABASE_URL not found in environment. Please check config/.env file.")
+        logger.error(
+            "DATABASE_URL not found in environment. Please check config/.env file."
+        )
         sys.exit(1)
-    
+
     db = DatabaseManager(database_url=database_url)
     logger.info("Database connection established")
-    
+
     # Handle initialization mode
     if args.init_schedules:
         logger.info("Initializing default crawl schedules...")
         create_default_schedules(db)
         logger.info("✓ Default schedules created")
         return
-    
+
     # Determine mode
     if args.dry_run:
         mode = SchedulerMode.DRY_RUN
@@ -144,23 +141,21 @@ Examples:
     else:
         mode = SchedulerMode.DAEMON
         logger.info("Running in DAEMON mode")
-    
+
     # Create scheduler
     scheduler = ArchivalScheduler(
-        db_manager=db,
-        max_concurrent_crawls=args.max_concurrent,
-        mode=mode
+        db_manager=db, max_concurrent_crawls=args.max_concurrent, mode=mode
     )
-    
+
     # Handle list jobs mode
     if args.list_jobs:
         scheduler.start()
         jobs = scheduler.get_pending_jobs()
-        
-        print("\n" + "="*80)
+
+        print("\n" + "=" * 80)
         print(f"PENDING SCHEDULED JOBS ({len(jobs)})")
-        print("="*80)
-        
+        print("=" * 80)
+
         if not jobs:
             print("No jobs scheduled")
         else:
@@ -169,33 +164,33 @@ Examples:
                 print(f"  ID: {job['id']}")
                 print(f"  Next Run: {job['next_run_time']}")
                 print(f"  Trigger: {job['trigger']}")
-        
-        print("\n" + "="*80 + "\n")
+
+        print("\n" + "=" * 80 + "\n")
         scheduler.stop(wait=False)
         return
-    
+
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     # Start scheduler
     try:
         scheduler.start()
-        
-        print("\n" + "="*80)
+
+        print("\n" + "=" * 80)
         print("WEB ARCHIVAL SCHEDULER DAEMON")
-        print("="*80)
+        print("=" * 80)
         print(f"Started: {datetime.now()}")
         print(f"Mode: {mode.value}")
         print(f"Max Concurrent: {args.max_concurrent}")
         print(f"Active Jobs: {len(scheduler.get_pending_jobs())}")
-        print("="*80)
+        print("=" * 80)
         print("\nPress Ctrl+C to stop\n")
-        
+
         # Keep running
         while True:
             time.sleep(60)  # Check every minute
-            
+
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
     except Exception as e:
@@ -207,5 +202,5 @@ Examples:
         logger.info("Scheduler stopped cleanly")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

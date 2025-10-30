@@ -469,9 +469,13 @@ class DatabaseManager:
 
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://crypto_user:crypto_secure_password_2024@localhost:5432/crypto_analytics")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://crypto_user:crypto_secure_password_2024@localhost:5432/crypto_analytics",
+)
 
 _db_manager = None
+
 
 def get_db_session():
     """Provides a database session."""
@@ -479,6 +483,7 @@ def get_db_session():
     if _db_manager is None:
         _db_manager = DatabaseManager(DATABASE_URL)
     return _db_manager.get_session()
+
 
 # Import the status log classes after all other models are defined
 # This avoids circular import issues
