@@ -18,7 +18,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import Session
 
-from models.database import DatabaseManager, CryptoProject, get_db_session
+from models.database import DatabaseManager, CryptoProject, ProjectLink, get_db_session
 from models.archival_models import CrawlSchedule, CrawlJob, CrawlStatus, CrawlFrequency
 from .crawler import ArchivalCrawler, CrawlConfig
 
@@ -138,13 +138,13 @@ class ArchivalScheduler:
         Args:
             schedule: CrawlSchedule database record
         """
-        job_id = f"crawl_schedule_{schedule.schedule_id}"
+        job_id = f"crawl_schedule_{schedule.id}"
 
         # Convert frequency to trigger
         trigger = self._get_trigger(schedule)
         if not trigger:
             logger.warning(
-                f"Could not create trigger for schedule {schedule.schedule_id}"
+                f"Could not create trigger for schedule {schedule.id}"
             )
             return
 
@@ -153,12 +153,12 @@ class ArchivalScheduler:
             func=self._execute_crawl,
             trigger=trigger,
             id=job_id,
-            args=[schedule.schedule_id],
-            name=f"Crawl: {schedule.project.name if schedule.project else 'Custom'}",
+            args=[schedule.id],
+            name=f"Crawl Schedule {schedule.id} (Project {schedule.project_id})",
             replace_existing=True,
         )
 
-        logger.info(f"Scheduled job {job_id} with frequency {schedule.crawl_frequency}")
+        logger.info(f"Scheduled job {job_id} with frequency {schedule.frequency}")
 
     def _get_trigger(self, schedule: CrawlSchedule):
         """
@@ -170,15 +170,9 @@ class ArchivalScheduler:
         Returns:
             APScheduler trigger instance
         """
-        freq = schedule.crawl_frequency
+        freq = schedule.frequency
 
-        if freq == CrawlFrequency.HOURLY:
-            return IntervalTrigger(hours=1)
-        elif freq == CrawlFrequency.EVERY_6_HOURS:
-            return IntervalTrigger(hours=6)
-        elif freq == CrawlFrequency.EVERY_12_HOURS:
-            return IntervalTrigger(hours=12)
-        elif freq == CrawlFrequency.DAILY:
+        if freq == CrawlFrequency.DAILY:
             return CronTrigger(hour=2, minute=0)  # 2 AM daily
         elif freq == CrawlFrequency.WEEKLY:
             return CronTrigger(day_of_week="mon", hour=2, minute=0)
@@ -186,7 +180,7 @@ class ArchivalScheduler:
             return IntervalTrigger(weeks=2)
         elif freq == CrawlFrequency.MONTHLY:
             return CronTrigger(day=1, hour=2, minute=0)
-        elif freq == CrawlFrequency.MANUAL:
+        elif freq == CrawlFrequency.ON_DEMAND:
             return None  # Manual only
         else:
             logger.warning(f"Unknown frequency: {freq}")
@@ -213,14 +207,21 @@ class ArchivalScheduler:
                 logger.info(f"Schedule {schedule_id} is disabled, skipping")
                 return
 
-            # Check for existing running jobs
+            # Get the project link to get URL
+            from models.database import ProjectLink
+            link = session.get(ProjectLink, schedule.link_id)
+            if not link or not link.url:
+                logger.error(f"Link {schedule.link_id} not found or has no URL")
+                return
+
+            # Check for existing running jobs for this link
             existing = session.execute(
                 select(CrawlJob).filter(
                     and_(
-                        CrawlJob.schedule_id == schedule_id,
+                        CrawlJob.link_id == schedule.link_id,
                         or_(
                             CrawlJob.status == CrawlStatus.PENDING,
-                            CrawlJob.status == CrawlStatus.RUNNING,
+                            CrawlJob.status == CrawlStatus.IN_PROGRESS,
                         ),
                     )
                 )
@@ -228,37 +229,43 @@ class ArchivalScheduler:
 
             if existing:
                 logger.warning(
-                    f"Crawl already running for schedule {schedule_id}, skipping"
+                    f"Crawl already running for link {schedule.link_id}, skipping"
                 )
                 return
 
-            # Create crawler config
+            # Create crawler config (use simple defaults since CrawlSchedule doesn't store these)
             config = CrawlConfig(
-                seed_url=schedule.target_url,
-                max_pages=schedule.max_pages,
-                max_depth=schedule.max_depth,
-                javascript_timeout=schedule.page_timeout_seconds or 30,
-                respect_robots_txt=schedule.respect_robots_txt,
+                seed_url=link.url,
+                max_pages=50,
+                max_depth=2,
+                javascript_timeout=30,
+                respect_robots_txt=True,
             )
 
             # Execute crawl
             try:
                 if self.mode == SchedulerMode.DRY_RUN:
-                    logger.info(f"DRY RUN: Would crawl {schedule.target_url}")
+                    logger.info(f"DRY RUN: Would crawl {link.url} (schedule {schedule_id})")
                 else:
-                    job = self.crawler.create_crawl_job(
+                    # Create crawl job manually since CrawlJob stores all config
+                    from models.archival_models import CrawlJob as CrawlJobModel
+                    job = CrawlJobModel(
+                        link_id=schedule.link_id,
                         project_id=schedule.project_id,
-                        schedule_id=schedule_id,
-                        priority=schedule.priority,
-                        config=config,
+                        seed_url=link.url,
+                        max_pages=50,
+                        max_depth=2,
+                        status=CrawlStatus.PENDING,
                     )
+                    session.add(job)
+                    session.commit()
+                    session.refresh(job)
 
-                    # Run crawl
-                    self.crawler.execute_crawl(job.job_id)
+                    # Run crawl using the crawler
+                    self.crawler.execute_crawl(job.id)
 
                     # Update schedule stats
-                    schedule.last_crawl_time = datetime.utcnow()
-                    schedule.total_crawls += 1
+                    schedule.last_run_at = datetime.utcnow()
                     session.commit()
 
                     logger.info(f"Completed scheduled crawl {schedule_id}")
@@ -267,14 +274,8 @@ class ArchivalScheduler:
                 logger.error(
                     f"Error executing scheduled crawl {schedule_id}: {e}", exc_info=True
                 )
-                schedule.consecutive_failures += 1
+                # Note: consecutive_failures doesn't exist in schema, skip it
                 session.commit()
-
-                # Disable schedule after too many failures
-                if schedule.consecutive_failures >= 5:
-                    logger.error(f"Schedule {schedule_id} disabled after 5 failures")
-                    schedule.enabled = False
-                    session.commit()
 
     def add_schedule(
         self,
@@ -324,7 +325,7 @@ class ArchivalScheduler:
                 self._create_job(schedule)
 
             logger.info(
-                f"Created crawl schedule {schedule.schedule_id} "
+                f"Created crawl schedule {schedule.id} "
                 f"for {target_url} ({frequency})"
             )
 
@@ -470,43 +471,43 @@ def create_default_schedules(db_manager: DatabaseManager) -> None:
         db_manager: Database manager instance
     """
 
-    scheduler = ArchivalScheduler(db_manager)
-
     with get_db_session() as session:
+        # Get top projects with website links
         projects = (
             session.execute(
                 select(CryptoProject)
-                .filter(CryptoProject.is_active == True)
-                .order_by(CryptoProject.market_cap_rank)
+                .order_by(CryptoProject.rank)
+                .limit(100)  # Start with top 100 projects
             )
             .scalars()
             .all()
         )
 
-        logger.info(f"Creating default schedules for {len(projects)} projects")
+        logger.info(f"Creating default schedules for up to {len(projects)} projects")
 
+        created_count = 0
+        # Get website links for these projects
         for project in projects:
-            if not project.website_url:
+            # Get website link from project_links table
+            website_link = session.execute(
+                select(ProjectLink)
+                .filter(
+                    and_(
+                        ProjectLink.project_id == project.id,
+                        ProjectLink.link_type == "website",
+                        ProjectLink.is_active == True,
+                        ProjectLink.url != None
+                    )
+                )
+            ).scalar_one_or_none()
+            
+            if not website_link or not website_link.url:
                 continue
 
-            # Determine frequency based on market cap rank
-            if project.market_cap_rank and project.market_cap_rank <= 100:
-                frequency = CrawlFrequency.WEEKLY
-                priority = 8  # High priority
-            elif project.market_cap_rank and project.market_cap_rank <= 1000:
-                frequency = CrawlFrequency.BIWEEKLY
-                priority = 5  # Normal priority
-            else:
-                frequency = CrawlFrequency.MONTHLY
-                priority = 3  # Low priority
-
-            # Check if schedule already exists
+            # Check if schedule already exists for this link
             existing = session.execute(
                 select(CrawlSchedule).filter(
-                    and_(
-                        CrawlSchedule.project_id == project.id,
-                        CrawlSchedule.target_url == project.website_url,
-                    )
+                    CrawlSchedule.link_id == website_link.id
                 )
             ).scalar_one_or_none()
 
@@ -514,12 +515,33 @@ def create_default_schedules(db_manager: DatabaseManager) -> None:
                 logger.debug(f"Schedule already exists for {project.code}")
                 continue
 
-            # Create schedule
-            scheduler.add_schedule(
+            # Determine frequency based on rank
+            if project.rank and project.rank <= 100:
+                frequency = CrawlFrequency.WEEKLY
+                priority = 8  # High priority
+            elif project.rank and project.rank <= 1000:
+                frequency = CrawlFrequency.BIWEEKLY
+                priority = 5  # Normal priority
+            else:
+                frequency = CrawlFrequency.MONTHLY
+                priority = 3  # Low priority
+
+            # Calculate next run time (1 hour from now)
+            next_run = datetime.utcnow() + timedelta(hours=1)
+
+            # Create schedule directly
+            schedule = CrawlSchedule(
+                link_id=website_link.id,
                 project_id=project.id,
-                target_url=project.website_url,
+                enabled=True,
                 frequency=frequency,
                 priority=priority,
-                max_pages=50,
-                max_depth=2,
+                next_run_at=next_run,
             )
+
+            session.add(schedule)
+            created_count += 1
+            logger.info(f"Created schedule for {project.name} ({project.code}) - {frequency.value}")
+
+        session.commit()
+        logger.info(f"✓ Created {created_count} crawl schedules")
