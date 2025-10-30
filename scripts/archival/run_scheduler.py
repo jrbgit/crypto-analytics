@@ -152,7 +152,7 @@ Examples:
     if args.init_schedules:
         logger.info("Initializing default crawl schedules...")
         create_default_schedules(db)
-        logger.info("✓ Default schedules created")
+        logger.info("[OK] Default schedules created")
         return
 
     # Determine mode

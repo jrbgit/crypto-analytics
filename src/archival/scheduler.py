@@ -545,4 +545,4 @@ def create_default_schedules(db_manager: DatabaseManager) -> None:
             logger.info(f"Created schedule for {project.name} ({project.code}) - {frequency.value}")
 
         session.commit()
-        logger.info(f"✓ Created {created_count} crawl schedules")
+        logger.info(f"[OK] Created {created_count} crawl schedules")
