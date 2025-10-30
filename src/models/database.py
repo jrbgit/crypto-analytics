@@ -406,6 +406,7 @@ class DatabaseManager:
     """Manage database connections and operations."""
 
     def __init__(self, database_url: str):
+        self.database_url = database_url  # Store original URL string
         self.engine = create_engine(database_url)
         self.SessionLocal = sessionmaker(
             autocommit=False, autoflush=False, bind=self.engine

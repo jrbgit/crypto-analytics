@@ -28,13 +28,20 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Add parent directory to path
+# Add parent directory to path FIRST
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from scripts.path_utils import get_config_path
 
-# Load environment variables from config/.env
-config_dir = Path(__file__).parent.parent.parent / "config"
-load_dotenv(config_dir / ".env")
+# Load environment variables BEFORE importing any database modules
+load_dotenv(get_config_path() / ".env")
 
+# Set DATABASE_URL environment variable explicitly to ensure it's available
+# for any module that imports models.database
+if not os.getenv("DATABASE_URL"):
+    raise RuntimeError("DATABASE_URL not found in config/.env")
+
+# NOW import database modules (after env is loaded)
+from sqlalchemy.exc import OperationalError
 from src.database.manager import DatabaseManager
 from src.archival.scheduler import (
     ArchivalScheduler,
@@ -107,6 +114,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--database-url",
+        type=str,
+        help="Database connection URL (overrides DATABASE_URL environment variable)",
+    )
+
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
 
@@ -116,16 +129,24 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Initialize database from environment
-    database_url = os.getenv("DATABASE_URL")
+    # Initialize database
+    database_url = args.database_url or os.getenv("DATABASE_URL")
     if not database_url:
         logger.error(
-            "DATABASE_URL not found in environment. Please check config/.env file."
+            "DATABASE_URL not found in environment or via --database-url argument. Please check config/.env file or provide the argument."
         )
         sys.exit(1)
 
-    db = DatabaseManager(database_url=database_url)
-    logger.info("Database connection established")
+    logger.debug(f"Attempting to connect to database with URL: {database_url}")
+    try:
+        db = DatabaseManager(database_url=database_url)
+        logger.info("Database connection established")
+    except OperationalError as e:
+        logger.error(
+            f"Failed to connect to the database: {e}. "
+            "Please check your DATABASE_URL, especially the password, in config/.env or the --database-url argument."
+        )
+        sys.exit(1)
 
     # Handle initialization mode
     if args.init_schedules:

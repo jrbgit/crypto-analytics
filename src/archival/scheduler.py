@@ -64,7 +64,8 @@ class ArchivalScheduler:
         self.max_concurrent = max_concurrent_crawls
 
         # APScheduler configuration
-        jobstores = {"default": SQLAlchemyJobStore(url=str(db_manager.engine.url))}
+        # Use the original database URL string to avoid password masking by SQLAlchemy
+        jobstores = {"default": SQLAlchemyJobStore(url=db_manager.database_url)}
         executors = {"default": ThreadPoolExecutor(max_concurrent_crawls)}
         job_defaults = {
             "coalesce": False,  # Run all missed jobs
