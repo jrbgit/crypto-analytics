@@ -170,6 +170,18 @@ Analyzes cryptocurrency project websites for:
 - Max depth: 2
 - Model: llama3.1:latest
 
+**Options:**
+- None (uses defaults above and environment variables like `DATABASE_URL`)
+
+**Examples:**
+```powershell
+# Run one website batch (25 items)
+python scripts/analysis/run_website_analysis.py
+
+# Run repeatedly to process remaining items
+while ($true) { python scripts/analysis/run_website_analysis.py; Start-Sleep 30 }
+```
+
 ---
 
 ### Whitepaper Analysis
@@ -191,6 +203,24 @@ Analyzes project whitepapers (PDF and web formats) for:
 - PDF parsing
 - Web-based whitepaper support
 - Google Drive integration
+
+**Default Configuration:**
+- Batch size: 20 whitepapers
+- Timeout: 60s per request
+- Max file size: 50MB
+- Model: llama3.1:latest
+
+**Options:**
+- None (uses defaults above and environment variables like `DATABASE_URL`)
+
+**Examples:**
+```powershell
+# Run one whitepaper batch (20 items)
+python scripts/analysis/run_whitepaper_analysis.py
+
+# Run repeatedly to process remaining items
+while ($true) { python scripts/analysis/run_whitepaper_analysis.py; Start-Sleep 60 }
+```
 
 ---
 
@@ -217,6 +247,18 @@ Analyzes Medium blog posts and articles for:
 - 5-minute delay between batches
 - Conservative request timing
 
+**Options:**
+- None (uses defaults; choose standard or limited runner)
+
+**Examples:**
+```powershell
+# Standard Medium analysis batch
+python scripts/analysis/run_medium_analysis.py
+
+# Very conservative Medium analysis batch
+python scripts/analysis/run_medium_limited.py
+```
+
 ---
 
 ### Reddit Analysis
@@ -237,6 +279,18 @@ Analyzes Reddit communities for:
 - Post scraping (up to 50 posts)
 - Content recency filtering (90 days)
 - Error tracking
+
+**Options:**
+- None (uses defaults above and environment variables like `DATABASE_URL`)
+
+**Examples:**
+```powershell
+# Run one Reddit batch (50 items)
+python scripts/analysis/run_reddit_analysis.py
+
+# Run repeatedly to process remaining items
+while ($true) { python scripts/analysis/run_reddit_analysis.py; Start-Sleep 30 }
+```
 
 **Note:** Requires Reddit API credentials in `config/.env`
 
@@ -329,20 +383,37 @@ python src/analyzers/telegram_analyzer.py batch 10
 
 ### YouTube Analysis
 
-**Command:**
+YouTube analysis is executed via the comprehensive pipeline.
+
+**Primary Command:**
 ```powershell
-python scripts/analysis/test_youtube_integration.py
+python scripts/analysis/run_comprehensive_analysis.py --enable youtube
 ```
 
 **Description:**
 Analyzes YouTube channels for:
 - Channel metrics
-- Video content
-- Subscriber count
+- Video content and topics
+- Subscriber count and engagement
 - Upload frequency
-- Engagement statistics
 
-**Note:** Requires YouTube API credentials and OAuth setup
+**Options:**
+- Use the options from `run_comprehensive_analysis.py` (e.g., `--batch-size youtube=20`)
+
+**Examples:**
+```powershell
+# Only analyze YouTube (default batch size 20)
+python scripts/analysis/run_comprehensive_analysis.py --enable youtube
+
+# Increase YouTube batch size to 40
+python scripts/analysis/run_comprehensive_analysis.py --enable youtube --batch-size youtube=40
+```
+
+**YouTube OAuth Setup:**
+```powershell
+python scripts/setup_youtube_oauth.py
+```
+Configures OAuth and verifies YouTube API access.
 
 ---
 
@@ -354,6 +425,9 @@ Analyzes YouTube channels for:
 ```powershell
 python scripts/analysis/monitor_progress.py
 ```
+
+**Options:**
+- None
 
 **Output Includes:**
 - Total projects in database
@@ -385,8 +459,11 @@ python scripts/analysis/monitor_progress.py
 python scripts/analysis/analyze_filtering_impact.py
 ```
 
+**Options:**
+- None
+
 **Description:**
-Analyzes the impact of URL filtering on content analysis results.
+Analyzes the impact of URL filtering on content analysis results and estimates time/resource savings.
 
 ---
 
@@ -591,18 +668,35 @@ python scripts/utils/reset_failed_projects.py [OPTIONS]
 ```
 
 **Options:**
-- `--link-type <type>` - Specific link type to reset (e.g., website, reddit)
-- `--dry-run` - Show what would be reset without making changes
+Selection criteria (one or more):
 - `--all` - Reset all failed projects
-- `--days <number>` - Only reset projects that failed more than N days ago
+- `--domain <domain>` - Reset projects matching domain (e.g., bitcoin.org)
+- `--project-code <code>` - Reset a specific project (e.g., BTC)
+- `--link-type <type>` - One of: website, whitepaper, medium, reddit, youtube
+- `--failures-gte <n>` - Only reset projects with consecutive failures >= n
+- `--url-contains <substr>` - Reset links whose URL contains substring
+
+Actions:
+- `--list-failed` - List failed projects instead of resetting
+- `--dry-run` - Show what would be reset without making changes
+- `--verbose` - Detailed output
 
 **Examples:**
 ```powershell
 # Reset failed website analyses (dry run)
 python scripts/utils/reset_failed_projects.py --link-type website --dry-run
 
-# Reset all failed analyses older than 7 days
-python scripts/utils/reset_failed_projects.py --all --days 7
+# Reset projects with 3+ failures for whitepapers
+python scripts/utils/reset_failed_projects.py --link-type whitepaper --failures-gte 3
+
+# Reset a specific domain
+python scripts/utils/reset_failed_projects.py --domain "bitcoin.org"
+
+# Reset a specific project
+python scripts/utils/reset_failed_projects.py --project-code BTC
+
+# Just list failed projects with 2+ failures
+python scripts/utils/reset_failed_projects.py --list-failed --failures-gte 2
 ```
 
 ---
@@ -619,19 +713,27 @@ python scripts/archival/trigger_crawl.py [OPTIONS]
 ```
 
 **Options:**
-- `--project <code>` - Project code to crawl
-- `--engine <type>` - Crawl engine: `simple` or `playwright` (default: simple)
-- `--max-pages <number>` - Maximum pages to crawl (default: 50)
-- `--max-depth <number>` - Maximum crawl depth (default: 3)
-- `--timeout <seconds>` - Request timeout (default: 30)
+- `--project <code>` - Project code to crawl (can be used multiple times)
+- `--url <url>` - Crawl an arbitrary URL (not in database)
+- `--engine <type>` - Crawler engine: `simple`, `browsertrix`, or `brozzler` (default: simple)
+- `--max-depth <n>` - Maximum crawl depth (default: 2)
+- `--max-pages <n>` - Maximum pages to crawl (default: 50)
+- `--storage <backend>` - Storage backend: `local`, `s3`, `azure` (default: local)
+- `--verbose` - Verbose output
 
 **Examples:**
 ```powershell
 # Crawl Bitcoin project website
 python scripts/archival/trigger_crawl.py --project BTC --engine simple --max-pages 50
 
-# Deep crawl with Playwright
-python scripts/archival/trigger_crawl.py --project ETH --engine playwright --max-depth 4
+# Crawl arbitrary URL with simple engine
+python scripts/archival/trigger_crawl.py --url https://uniswap.org --engine simple
+
+# Deep crawl with Browsertrix
+python scripts/archival/trigger_crawl.py --project ETH --engine browsertrix --max-depth 4
+
+# Crawl multiple projects
+python scripts/archival/trigger_crawl.py --project BTC --project ETH --project BNB
 ```
 
 ---
@@ -654,6 +756,7 @@ python scripts/archival/integrate_with_pipeline.py [OPTIONS]
 - `--limit <number>` - Maximum number of projects to process (default: 10)
 - `--threshold <float>` - Change detection threshold (0.0-1.0, default: 0.3)
 - `--dry-run` - Simulate without making actual changes
+- `--verbose` (`-v`) - Verbose logging
 
 **Examples:**
 ```powershell
@@ -677,22 +780,27 @@ python scripts/archival/monitor_archival.py [OPTIONS]
 ```
 
 **Options:**
-- `--days <number>` - Number of days of history to show (default: 30)
-- `--show-errors` - Show detailed error information
-- `--show-jobs` - Show crawl job details
-- `--show-changes` - Show detected website changes
-- `--project <code>` - Filter by specific project code
+- `--dashboard` - Show full monitoring dashboard (default if no flags)
+- `--storage` - Show storage statistics
+- `--crawl-stats` - Show crawl statistics
+- `--changes` - Show change detection statistics
+- `--schedules` - Show schedule statistics
+- `--days <n>` - Time window in days for time-based stats (default: 30)
+- `--json` - Output JSON instead of text
 
 **Examples:**
 ```powershell
-# View archival status for last 30 days
-python scripts/archival/monitor_archival.py
+# View full dashboard
+python scripts/archival/monitor_archival.py --dashboard
 
-# Show errors and job details
-python scripts/archival/monitor_archival.py --show-errors --show-jobs
+# Show crawl stats for last 7 days
+python scripts/archival/monitor_archival.py --crawl-stats --days 7
 
-# Monitor specific project
-python scripts/archival/monitor_archival.py --project BTC --show-changes
+# Show storage and schedule statistics (text)
+python scripts/archival/monitor_archival.py --storage --schedules
+
+# Output JSON with change stats
+python scripts/archival/monitor_archival.py --changes --json
 ```
 
 ---
@@ -717,10 +825,26 @@ python scripts/archival/generate_cdx_indexes.py [OPTIONS]
 ```
 
 **Options:**
-- `--project <code>` - Generate index for specific project
-- `--all` - Generate indexes for all projects
-- `--rebuild` - Rebuild existing indexes
-- `--output-dir <path>` - Output directory for CDX files
+- `--batch` (`-b`) - Batch index all unindexed WARCs
+- `--warc-id <id>` (`-w`) - Index a specific WARC by ID
+- `--snapshot-id <id>` (`-s`) - Index all WARCs for a snapshot ID
+- `--limit <n>` (`-l`) - Limit number of WARCs to process (batch mode)
+- `--verbose` (`-v`) - Verbose output
+
+**Examples:**
+```powershell
+# Index all unindexed WARCs
+python scripts/archival/generate_cdx_indexes.py --batch
+
+# Index a specific WARC file
+python scripts/archival/generate_cdx_indexes.py --warc-id 123
+
+# Index all WARCs for a snapshot
+python scripts/archival/generate_cdx_indexes.py --snapshot-id 456
+
+# Batch index with a limit
+python scripts/archival/generate_cdx_indexes.py --batch --limit 100
+```
 
 **Description:**
 Generates CDX (Capture Index) files for archived web content, useful for Wayback Machine-style browsing.
@@ -735,9 +859,30 @@ python scripts/archival/run_scheduler.py [OPTIONS]
 ```
 
 **Options:**
-- `--interval <minutes>` - Check interval in minutes (default: 60)
-- `--daemon` - Run as background daemon
-- `--max-concurrent <number>` - Maximum concurrent crawls (default: 3)
+- `--dry-run` - Show what would be scheduled without executing
+- `--init-schedules` - Create default schedules for all projects and exit
+- `--list-jobs` - List all pending jobs and exit
+- `--max-concurrent <n>` - Maximum concurrent crawl jobs (default: 3)
+- `--database-url <url>` - Override `DATABASE_URL` from environment
+- `--verbose` (`-v`) - Enable verbose logging
+
+**Examples:**
+```powershell
+# Run scheduler daemon (uses DATABASE_URL)
+python scripts/archival/run_scheduler.py
+
+# Initialize default schedules and exit
+python scripts/archival/run_scheduler.py --init-schedules
+
+# Dry run to preview scheduling actions
+python scripts/archival/run_scheduler.py --dry-run
+
+# List pending jobs
+python scripts/archival/run_scheduler.py --list-jobs
+
+# Increase concurrency to 5
+python scripts/archival/run_scheduler.py --max-concurrent 5
+```
 
 **Description:**
 Runs automated scheduler for periodic website crawling based on configured schedules.
@@ -954,12 +1099,12 @@ YOUTUBE_API_KEY=your_youtube_key
 
 | Category | Primary Commands |
 |----------|------------------|
-| **Data Collection** | `livecoinwatch.py` |
-| **Analysis** | `run_comprehensive_analysis.py`, `run_website_analysis.py`, `twitter_analyzer.py`, `telegram_analyzer.py` |
-| **Monitoring** | `monitor_progress.py`, `monitor_archival.py` |
-| **Database** | `init_db.py`, `alembic`, migration scripts |
-| **Archival** | `trigger_crawl.py`, `integrate_with_pipeline.py` |
-| **Development** | `lint.py`, `check_types.py`, `pytest` |
+| Data Collection | src/collectors/livecoinwatch.py |
+| Analysis | scripts/analysis/run_comprehensive_analysis.py, scripts/analysis/run_website_analysis.py, src/analyzers/twitter_analyzer.py, src/analyzers/telegram_analyzer.py |
+| Monitoring | scripts/analysis/monitor_progress.py, scripts/archival/monitor_archival.py |
+| Database | src/models/init_db.py, alembic, scripts/check_db_schema.py, scripts/apply_migrations.py |
+| Archival | scripts/archival/trigger_crawl.py, scripts/archival/integrate_with_pipeline.py, scripts/archival/run_scheduler.py |
+| Development | scripts/dev/lint.py, scripts/dev/check_types.py, pytest |
 
 ---
 
