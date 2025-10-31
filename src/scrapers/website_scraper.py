@@ -412,37 +412,56 @@ class WebsiteScraper:
             except Exception as e:
                 error_msg = str(e)
 
-                # Check if this is a retryable error
-                is_retryable = self._is_retryable_error(error_msg)
+                # Check if this is a retryable error and get appropriate retry count
+                is_retryable, max_retries_for_error = self._is_retryable_error(error_msg)
 
-                if attempt < max_retries and is_retryable:
-                    backoff_time = (
-                        2**attempt
-                    ) * 0.5  # Exponential backoff: 0.5s, 1s, 2s
+                # Use error-specific max retries
+                effective_max_retries = min(max_retries, max_retries_for_error)
+
+                if attempt < effective_max_retries and is_retryable:
+                    # Enhanced exponential backoff: 1s, 2s, 4s, capped at 10s
+                    backoff_time = min((2**attempt) * 1.0, 10.0)
                     logger.debug(
-                        f"Retryable error for {url} on attempt {attempt + 1}, retrying in {backoff_time}s: {error_msg[:50]}..."
+                        f"Retryable error for {url} on attempt {attempt + 1}/{effective_max_retries + 1}, retrying in {backoff_time}s: {error_msg[:50]}..."
                     )
                     time.sleep(backoff_time)
                     continue
                 else:
                     # Final attempt failed or non-retryable error
+                    status_info["retry_attempts"] = attempt  # Track how many retries were attempted
                     return self._handle_fetch_error(url, status_info, e, attempt + 1)
 
         # Should never reach here
         return None, status_info
 
-    def _is_retryable_error(self, error_msg: str) -> bool:
-        """Determine if an error is retryable."""
-        # DNS resolution failures are typically permanent for the duration of a run
+    def _is_retryable_error(self, error_msg: str) -> Tuple[bool, int]:
+        """Determine if an error is retryable and how many retries to allow.
+        
+        Returns:
+            Tuple of (is_retryable: bool, max_retries: int)
+        """
+        # DNS resolution failures are typically permanent
         if "getaddrinfo failed" in error_msg or "Failed to resolve" in error_msg:
-            return False
+            return False, 0
 
         # SSL certificate errors are typically permanent
         if "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
-            return False
+            return False, 0
+        
+        # 404, 410 are permanent - page doesn't exist
+        if "404" in error_msg or "410" in error_msg or "Not Found" in error_msg:
+            return False, 0
 
-        # These are typically transient and worth retrying
-        retryable_patterns = [
+        # 5xx server errors are transient - allow more retries
+        if any(code in error_msg for code in ["500", "502", "503", "504"]):
+            return True, 3  # Server errors get 3 retries
+        
+        # Rate limiting should be retried with more patience
+        if "429" in error_msg or "rate limit" in error_msg.lower():
+            return True, 3
+
+        # Connection issues are somewhat transient - moderate retries
+        retryable_connection_patterns = [
             "timeout",
             "timed out",
             "Connection reset",
@@ -451,13 +470,15 @@ class WebsiteScraper:
             "connection was aborted",
             "Connection aborted",
             "Max retries exceeded",
-            "502",
-            "503",
-            "504",
             "Connection broken",
         ]
 
-        return any(pattern in error_msg for pattern in retryable_patterns)
+        for pattern in retryable_connection_patterns:
+            if pattern in error_msg:
+                return True, 2  # Connection errors get 2 retries
+        
+        # Default: not retryable
+        return False, 0
 
     def _fetch_page_attempt(
         self, url: str, status_info: Dict[str, Any], attempt: int, max_retries: int
@@ -519,8 +540,14 @@ class WebsiteScraper:
             pass
 
         # Now make the actual GET request
+        start_time = time.time()
         try:
             response = self.session.get(url, timeout=30)
+            
+            # Capture response metadata
+            status_info["http_status_code"] = response.status_code
+            status_info["response_time_ms"] = int((time.time() - start_time) * 1000)
+            
             response.raise_for_status()
 
             # Double-check content type after GET request

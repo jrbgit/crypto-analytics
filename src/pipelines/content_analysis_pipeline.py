@@ -389,30 +389,35 @@ class ContentAnalysisPipeline:
                     reason=scrape_result.error_message,
                 )
             else:
-                # Handle specific error types for better status tracking
-                # Check if scraper provided error type information
+                # Handle specific error types with full details
                 error_type = getattr(scrape_result, "error_type", None)
-
-                if error_type == "dns_resolution_error":
-                    self.status_logger.log_dns_error(
-                        link_id=website_link.id,
-                        url=website_link.url,
-                        error_message=scrape_result.error_message,
-                    )
-                elif error_type == "ssl_certificate_error":
-                    self.status_logger.log_ssl_error(
-                        link_id=website_link.id,
-                        url=website_link.url,
-                        error_message=scrape_result.error_message,
-                    )
+                
+                # Map error types to status types
+                if error_type and "dns" in error_type.lower():
+                    status_type = "dns_failure"
+                elif error_type and "ssl" in error_type.lower():
+                    status_type = "ssl_error"
+                elif error_type and ("timeout" in error_type.lower() or "connection" in error_type.lower()):
+                    status_type = "connection_error"
+                elif error_type and "http_5" in error_type.lower():
+                    status_type = "server_error"
+                elif error_type and "http_4" in error_type.lower():
+                    status_type = "client_error"
                 else:
-                    # Connection or other technical errors
-                    self.status_logger.log_connection_error(
-                        link_id=website_link.id,
-                        url=website_link.url,
-                        error_message=scrape_result.error_message
-                        or "Unknown scraping error",
-                    )
+                    status_type = "server_error"
+                
+                # Log with full details including error_type and http_status_code
+                self.status_logger.log_website_status(
+                    link_id=website_link.id,
+                    status_type=status_type,
+                    status_message=scrape_result.error_message or "Scraping failed",
+                    error_type=error_type,  # Pass detailed error type
+                    error_details=scrape_result.error_message,
+                    pages_attempted=1,
+                    pages_successful=0,
+                    dns_resolved=(False if error_type and "dns" in error_type.lower() else None),
+                    ssl_valid=(False if error_type and "ssl" in error_type.lower() else None),
+                )
 
             # Update scrape status without logging as error
             self._update_scrape_status(
