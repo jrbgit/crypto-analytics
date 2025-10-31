@@ -40,7 +40,7 @@ Runs analysis across all content types (websites, Medium, whitepapers, Reddit, Y
 
 **Command:**
 ```powershell
-python src/collectors/livecoinwatch.py
+python src/collectors/livecoinwatch.py [OPTIONS]
 ```
 
 **Description:**
@@ -50,11 +50,53 @@ Collects cryptocurrency project data from LiveCoinWatch API including:
 - Social media links
 - Project images
 
+**Options:**
+- `--all` - Collect all available cryptocurrencies instead of just top coins
+- `--limit <number>` - Maximum number of coins to collect (default: 100)
+- `--max-coins <number>` - Maximum coins when using `--all` flag
+- `--offset <number>` - Starting offset for collection, useful for resuming (default: 0)
+
+**Default Batch Sizes:**
+- Batch size: 100 coins per API request (LiveCoinWatch API limit)
+- Default collection: Top 100 coins by market cap
+- Rate limit buffer: Stops when 10 or fewer API calls remain
+
+**Examples:**
+```powershell
+# Collect top 100 cryptocurrencies (default)
+python src/collectors/livecoinwatch.py
+
+# Collect top 500 cryptocurrencies
+python src/collectors/livecoinwatch.py --limit 500
+
+# Collect all available cryptocurrencies
+python src/collectors/livecoinwatch.py --all
+
+# Collect up to 1000 coins from all available
+python src/collectors/livecoinwatch.py --all --max-coins 1000
+
+# Resume collection from offset 2000
+python src/collectors/livecoinwatch.py --all --offset 2000
+
+# Collect top 200, starting from offset 100
+python src/collectors/livecoinwatch.py --limit 200 --offset 100
+```
+
 **Features:**
 - Rate limiting (10,000 requests/day)
 - Automatic retry logic
-- Change tracking
+- Change tracking for all data fields
+- Progress updates every 10 batches
+- Graceful handling of rate limit exhaustion
 - Supports 52,000+ crypto projects
+- Database sanitization for large numeric values
+- Duplicate detection and update handling
+
+**Output Includes:**
+- Total projects collected
+- API calls used in session
+- API calls remaining for the day
+- Sample of collected projects
 
 **Note:** Requires `LIVECOINWATCH_API_KEY` in `config/.env`
 
