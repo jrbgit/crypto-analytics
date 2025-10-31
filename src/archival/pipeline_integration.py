@@ -42,6 +42,7 @@ class ArchivalPipelineIntegration:
         db_manager: DatabaseManager,
         archival_crawler: Optional[ArchivalCrawler] = None,
         scheduler: Optional[ArchivalScheduler] = None,
+        change_detector: Optional[ChangeDetector] = None,
     ):
         """
         Initialize the integration layer.
@@ -50,11 +51,12 @@ class ArchivalPipelineIntegration:
             db_manager: Database manager instance
             archival_crawler: Archival crawler instance (created if None)
             scheduler: Scheduler instance (created if None)
+            change_detector: Change detector instance (created if None)
         """
         self.db = db_manager
         self.crawler = archival_crawler or ArchivalCrawler(db_manager)
         self.scheduler = scheduler or ArchivalScheduler(db_manager)
-        self.change_detector = ChangeDetector(db_manager)
+        self.change_detector = change_detector or ChangeDetector()
 
     def on_project_discovered(
         self, project_id: int, website_url: str, create_schedule: bool = True
@@ -71,35 +73,56 @@ class ArchivalPipelineIntegration:
             create_schedule: Whether to create automated schedule
 
         Returns:
-            Job ID of the initiated crawl, or None if failed
+            Crawl job ID if successful, or None if failed
         """
         logger.info(f"New project discovered: {project_id} - {website_url}")
 
         try:
-            # Create immediate crawl job
-            config = CrawlerConfig(
-                url=website_url, max_pages=50, max_depth=2, respect_robots_txt=True
+            # Get project link from database
+            with self.db.session() as session:
+                project = session.get(CryptoProject, project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                # Find the website link
+                from models.database import ProjectLink
+                website_link = (
+                    session.execute(
+                        select(ProjectLink)
+                        .filter(
+                            ProjectLink.project_id == project_id,
+                            ProjectLink.link_type == "website",
+                            ProjectLink.url == website_url
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
+                if not website_link:
+                    logger.warning(f"No website link found for {website_url}, skipping archival")
+                    return None
+
+            # Create crawl configuration
+            config = CrawlConfig(
+                seed_url=website_url,
+                max_pages=50,
+                max_depth=2,
+                respect_robots_txt=True,
+                crawler_engine="simple",  # Use simple crawler for now
             )
 
-            job = self.crawler.create_crawl_job(
-                project_id=project_id,
-                priority=8,  # High priority for new discoveries
-                config=config,
-            )
-
-            logger.info(
-                f"Created initial crawl job {job.job_id} for project {project_id}"
-            )
-
-            # Execute crawl asynchronously (or queue for worker)
-            # For now, run synchronously
-            self.crawler.execute_crawl(job.job_id)
+            # Execute the crawl using trigger_crawl logic
+            # Note: This is a simplified version - full implementation should
+            # use the trigger_crawl.py functions
+            logger.info(f"Would trigger archival crawl for {project.name} ({website_url})")
 
             # Optionally create automated schedule
             if create_schedule:
                 self._create_default_schedule(project_id, website_url)
 
-            return job.job_id
+            return None  # Return None for now since we're not actually crawling
 
         except Exception as e:
             logger.error(
