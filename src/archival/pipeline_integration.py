@@ -87,13 +87,13 @@ class ArchivalPipelineIntegration:
 
                 # Find the website link
                 from models.database import ProjectLink
+
                 website_link = (
                     session.execute(
-                        select(ProjectLink)
-                        .filter(
+                        select(ProjectLink).filter(
                             ProjectLink.project_id == project_id,
                             ProjectLink.link_type == "website",
-                            ProjectLink.url == website_url
+                            ProjectLink.url == website_url,
                         )
                     )
                     .scalars()
@@ -101,7 +101,9 @@ class ArchivalPipelineIntegration:
                 )
 
                 if not website_link:
-                    logger.warning(f"No website link found for {website_url}, skipping archival")
+                    logger.warning(
+                        f"No website link found for {website_url}, skipping archival"
+                    )
                     return None
 
             # Create crawl configuration
@@ -116,7 +118,9 @@ class ArchivalPipelineIntegration:
             # Execute the crawl using trigger_crawl logic
             # Note: This is a simplified version - full implementation should
             # use the trigger_crawl.py functions
-            logger.info(f"Would trigger archival crawl for {project.name} ({website_url})")
+            logger.info(
+                f"Would trigger archival crawl for {project.name} ({website_url})"
+            )
 
             # Optionally create automated schedule
             if create_schedule:

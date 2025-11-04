@@ -413,7 +413,9 @@ class WebsiteScraper:
                 error_msg = str(e)
 
                 # Check if this is a retryable error and get appropriate retry count
-                is_retryable, max_retries_for_error = self._is_retryable_error(error_msg)
+                is_retryable, max_retries_for_error = self._is_retryable_error(
+                    error_msg
+                )
 
                 # Use error-specific max retries
                 effective_max_retries = min(max_retries, max_retries_for_error)
@@ -428,7 +430,9 @@ class WebsiteScraper:
                     continue
                 else:
                     # Final attempt failed or non-retryable error
-                    status_info["retry_attempts"] = attempt  # Track how many retries were attempted
+                    status_info["retry_attempts"] = (
+                        attempt  # Track how many retries were attempted
+                    )
                     return self._handle_fetch_error(url, status_info, e, attempt + 1)
 
         # Should never reach here
@@ -436,7 +440,7 @@ class WebsiteScraper:
 
     def _is_retryable_error(self, error_msg: str) -> Tuple[bool, int]:
         """Determine if an error is retryable and how many retries to allow.
-        
+
         Returns:
             Tuple of (is_retryable: bool, max_retries: int)
         """
@@ -447,7 +451,7 @@ class WebsiteScraper:
         # SSL certificate errors are typically permanent
         if "SSL" in error_msg.upper() or "certificate" in error_msg.lower():
             return False, 0
-        
+
         # 404, 410 are permanent - page doesn't exist
         if "404" in error_msg or "410" in error_msg or "Not Found" in error_msg:
             return False, 0
@@ -455,7 +459,7 @@ class WebsiteScraper:
         # 5xx server errors are transient - allow more retries
         if any(code in error_msg for code in ["500", "502", "503", "504"]):
             return True, 3  # Server errors get 3 retries
-        
+
         # Rate limiting should be retried with more patience
         if "429" in error_msg or "rate limit" in error_msg.lower():
             return True, 3
@@ -476,7 +480,7 @@ class WebsiteScraper:
         for pattern in retryable_connection_patterns:
             if pattern in error_msg:
                 return True, 2  # Connection errors get 2 retries
-        
+
         # Default: not retryable
         return False, 0
 
@@ -543,11 +547,11 @@ class WebsiteScraper:
         start_time = time.time()
         try:
             response = self.session.get(url, timeout=30)
-            
+
             # Capture response metadata
             status_info["http_status_code"] = response.status_code
             status_info["response_time_ms"] = int((time.time() - start_time) * 1000)
-            
+
             response.raise_for_status()
 
             # Double-check content type after GET request

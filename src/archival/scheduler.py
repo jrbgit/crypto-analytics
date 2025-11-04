@@ -29,21 +29,21 @@ def execute_scheduled_crawl(schedule_id: int, database_url: str, mode: str) -> N
     """
     Module-level function to execute a scheduled crawl.
     This function is picklable for APScheduler.
-    
+
     Args:
         schedule_id: ID of the schedule to execute
         database_url: Database connection URL
         mode: Scheduler mode (daemon/dry_run/single_run)
     """
     logger.info(f"Executing scheduled crawl {schedule_id}")
-    
+
     # Import here to avoid circular dependencies
     from models.database import DatabaseManager, ProjectLink
     from models.archival_models import CrawlSchedule, CrawlJob, CrawlStatus
     from .crawler import ArchivalCrawler, CrawlConfig
-    
+
     db_manager = DatabaseManager(database_url)
-    
+
     with get_db_session() as session:
         # Get schedule
         schedule = session.get(CrawlSchedule, schedule_id)
@@ -234,9 +234,7 @@ class ArchivalScheduler:
         # Convert frequency to trigger
         trigger = self._get_trigger(schedule)
         if not trigger:
-            logger.warning(
-                f"Could not create trigger for schedule {schedule.id}"
-            )
+            logger.warning(f"Could not create trigger for schedule {schedule.id}")
             return
 
         # Add job to scheduler - use module-level function for pickling
@@ -276,7 +274,6 @@ class ArchivalScheduler:
         else:
             logger.warning(f"Unknown frequency: {freq}")
             return None
-
 
     def add_schedule(
         self,
@@ -491,25 +488,22 @@ def create_default_schedules(db_manager: DatabaseManager) -> None:
         for project in projects:
             # Get website link from project_links table
             website_link = session.execute(
-                select(ProjectLink)
-                .filter(
+                select(ProjectLink).filter(
                     and_(
                         ProjectLink.project_id == project.id,
                         ProjectLink.link_type == "website",
                         ProjectLink.is_active == True,
-                        ProjectLink.url != None
+                        ProjectLink.url != None,
                     )
                 )
             ).scalar_one_or_none()
-            
+
             if not website_link or not website_link.url:
                 continue
 
             # Check if schedule already exists for this link
             existing = session.execute(
-                select(CrawlSchedule).filter(
-                    CrawlSchedule.link_id == website_link.id
-                )
+                select(CrawlSchedule).filter(CrawlSchedule.link_id == website_link.id)
             ).scalar_one_or_none()
 
             if existing:
@@ -542,7 +536,9 @@ def create_default_schedules(db_manager: DatabaseManager) -> None:
 
             session.add(schedule)
             created_count += 1
-            logger.info(f"Created schedule for {project.name} ({project.code}) - {frequency.value}")
+            logger.info(
+                f"Created schedule for {project.name} ({project.code}) - {frequency.value}"
+            )
 
         session.commit()
         logger.info(f"[OK] Created {created_count} crawl schedules")

@@ -25,7 +25,12 @@ from sqlalchemy import select, and_, or_
 config_dir = Path(__file__).parent.parent.parent / "config"
 load_dotenv(config_dir / ".env")
 
-from models.database import DatabaseManager, CryptoProject, ProjectLink, LinkContentAnalysis
+from models.database import (
+    DatabaseManager,
+    CryptoProject,
+    ProjectLink,
+    LinkContentAnalysis,
+)
 from models.archival_models import (
     WebsiteSnapshot,
     SnapshotChangeDetection,
@@ -69,22 +74,19 @@ def crawl_recently_analyzed_websites(
         # Find recently analyzed website links
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_back)
 
-        recent_analyses = (
-            session.execute(
-                select(LinkContentAnalysis, ProjectLink, CryptoProject)
-                .join(ProjectLink, LinkContentAnalysis.link_id == ProjectLink.id)
-                .join(CryptoProject, ProjectLink.project_id == CryptoProject.id)
-                .filter(
-                    and_(
-                        ProjectLink.link_type == "website",
-                        LinkContentAnalysis.created_at >= cutoff_date,
-                    )
+        recent_analyses = session.execute(
+            select(LinkContentAnalysis, ProjectLink, CryptoProject)
+            .join(ProjectLink, LinkContentAnalysis.link_id == ProjectLink.id)
+            .join(CryptoProject, ProjectLink.project_id == CryptoProject.id)
+            .filter(
+                and_(
+                    ProjectLink.link_type == "website",
+                    LinkContentAnalysis.created_at >= cutoff_date,
                 )
-                .order_by(LinkContentAnalysis.created_at.desc())
-                .limit(limit)
             )
-            .all()
-        )
+            .order_by(LinkContentAnalysis.created_at.desc())
+            .limit(limit)
+        ).all()
 
         logger.info(f"Found {len(recent_analyses)} recently analyzed websites")
 
@@ -93,8 +95,7 @@ def crawl_recently_analyzed_websites(
             # Check if we already have a recent crawl
             existing_snapshot = (
                 session.execute(
-                    select(WebsiteSnapshot)
-                    .filter(
+                    select(WebsiteSnapshot).filter(
                         and_(
                             WebsiteSnapshot.link_id == link.id,
                             WebsiteSnapshot.snapshot_timestamp >= cutoff_date,
@@ -140,9 +141,7 @@ def crawl_recently_analyzed_websites(
                     if result.returncode == 0:
                         logger.success(f"Successfully crawled {project.name}")
                     else:
-                        logger.error(
-                            f"Failed to crawl {project.name}: {result.stderr}"
-                        )
+                        logger.error(f"Failed to crawl {project.name}: {result.stderr}")
                 except Exception as e:
                     logger.error(f"Error crawling {project.name}: {e}")
 
@@ -179,26 +178,23 @@ def check_changes_and_reanalyze(
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_back)
 
         # Find significant changes that haven't triggered reanalysis yet
-        significant_changes = (
-            session.execute(
-                select(SnapshotChangeDetection, WebsiteSnapshot, CryptoProject)
-                .join(
-                    WebsiteSnapshot,
-                    SnapshotChangeDetection.new_snapshot_id == WebsiteSnapshot.id,
-                )
-                .join(CryptoProject, WebsiteSnapshot.project_id == CryptoProject.id)
-                .filter(
-                    and_(
-                        SnapshotChangeDetection.change_score >= change_threshold,
-                        SnapshotChangeDetection.requires_reanalysis == True,
-                        SnapshotChangeDetection.diff_computed_at >= cutoff_date,
-                    )
-                )
-                .order_by(SnapshotChangeDetection.change_score.desc())
-                .limit(limit)
+        significant_changes = session.execute(
+            select(SnapshotChangeDetection, WebsiteSnapshot, CryptoProject)
+            .join(
+                WebsiteSnapshot,
+                SnapshotChangeDetection.new_snapshot_id == WebsiteSnapshot.id,
             )
-            .all()
-        )
+            .join(CryptoProject, WebsiteSnapshot.project_id == CryptoProject.id)
+            .filter(
+                and_(
+                    SnapshotChangeDetection.change_score >= change_threshold,
+                    SnapshotChangeDetection.requires_reanalysis == True,
+                    SnapshotChangeDetection.diff_computed_at >= cutoff_date,
+                )
+            )
+            .order_by(SnapshotChangeDetection.change_score.desc())
+            .limit(limit)
+        ).all()
 
         logger.info(
             f"Found {len(significant_changes)} websites with significant changes"
@@ -245,22 +241,19 @@ def create_schedules_for_top_projects(
 
     with db_manager.get_session() as session:
         # Get top projects with websites
-        top_projects = (
-            session.execute(
-                select(CryptoProject, ProjectLink)
-                .join(ProjectLink, CryptoProject.id == ProjectLink.project_id)
-                .filter(
-                    and_(
-                        ProjectLink.link_type == "website",
-                        ProjectLink.url.isnot(None),
-                        CryptoProject.rank.isnot(None),
-                    )
+        top_projects = session.execute(
+            select(CryptoProject, ProjectLink)
+            .join(ProjectLink, CryptoProject.id == ProjectLink.project_id)
+            .filter(
+                and_(
+                    ProjectLink.link_type == "website",
+                    ProjectLink.url.isnot(None),
+                    CryptoProject.rank.isnot(None),
                 )
-                .order_by(CryptoProject.rank.asc())
-                .limit(top_n)
             )
-            .all()
-        )
+            .order_by(CryptoProject.rank.asc())
+            .limit(top_n)
+        ).all()
 
         logger.info(f"Found {len(top_projects)} top projects with websites")
 
@@ -325,11 +318,12 @@ def main():
 
     # Initialize database
     import os
+
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         logger.error("DATABASE_URL environment variable not set")
         return 1
-    
+
     db_manager = DatabaseManager(database_url)
 
     try:
